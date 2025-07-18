@@ -20,6 +20,7 @@
   "homepage": "https://github.com/miedzygalaktycznygit/serwer_foor_render#readme",
   "dependencies": {
     "cors": "^2.8.5",
-    "express": "^5.1.0"
+    "express": "^5.1.0",
+    "pg": "^8.16.3"
   }
 }
