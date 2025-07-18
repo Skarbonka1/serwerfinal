@@ -17,5 +17,8 @@
   "bugs": {
     "url": "https://github.com/miedzygalaktycznygit/serwer_foor_render/issues"
   },
-  "homepage": "https://github.com/miedzygalaktycznygit/serwer_foor_render#readme"
+  "homepage": "https://github.com/miedzygalaktycznygit/serwer_foor_render#readme",
+  "dependencies": {
+    "express": "^5.1.0"
+  }
 }
