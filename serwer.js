@@ -1,12 +1,16 @@
 // Krok 1: Importowanie wymaganych modułów
 const express = require('express');
 const cors = require('cors');
-// 'pg' to pakiet do łączenia się z bazą danych PostgreSQL.
 const { Pool } = require('pg');
-// 'express-rate-limit' to pakiet do zabezpieczania serwera.
 const rateLimit = require('express-rate-limit');
 
 const app = express();
+
+// --- NOWA LINIA ---
+// Konfiguracja zaufanego proxy. Render działa jako "proxy", więc musimy powiedzieć
+// Expressowi, aby ufał informacjom przesyłanym przez Render (np. o prawdziwym
+// adresie IP użytkownika). Jest to wymagane, aby express-rate-limit działał poprawnie.
+app.set('trust proxy', 1);
 
 // Krok 2: Konfiguracja gotowa na Render
 const PORT = process.env.PORT || 3001;
@@ -24,10 +28,10 @@ app.use(cors());
 app.use(express.json());
 
 const limiter = rateLimit({
-	windowMs: 15 * 60 * 1000, // 15 minut
-	max: 100, // Limit 100 zapytań na 15 minut dla jednego adresu IP
-	standardHeaders: true,
-	legacyHeaders: false,
+    windowMs: 15 * 60 * 1000, // 15 minut
+    max: 100, // Limit 100 zapytań na 15 minut dla jednego adresu IP
+    standardHeaders: true,
+    legacyHeaders: false,
     message: 'Zbyt wiele zapytań z tego IP, spróbuj ponownie za 15 minut.'
 });
 
@@ -81,7 +85,6 @@ app.get('/api/tasks', async (req, res) => {
 // CREATE: Dodawanie nowego zadania
 app.post('/api/tasks', async (req, res) => {
   try {
-    // Teraz przy tworzeniu zadania musimy podać jego tekst oraz ID użytkownika, do którego należy
     const { text, user_id } = req.body;
     if (!text || !user_id) {
       return res.status(400).json({ message: 'Tekst zadania oraz user_id są wymagane.' });
