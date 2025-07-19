@@ -5,14 +5,10 @@ const { Pool } = require('pg');
 const rateLimit = require('express-rate-limit');
 
 const app = express();
-
-// Konfiguracja zaufanego proxy dla Render (wymagane przez rate-limiter)
 app.set('trust proxy', 1);
 
-// Krok 2: Konfiguracja portu
 const PORT = process.env.PORT || 3001;
 
-// Krok 3: Konfiguracja połączenia z bazą danych
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: {
@@ -20,7 +16,6 @@ const pool = new Pool({
   }
 });
 
-// Krok 4: Konfiguracja middleware
 app.use(cors());
 app.use(express.json());
 
@@ -36,10 +31,38 @@ app.use('/api', limiter);
 // --- ENDPOINTY API DLA UŻYTKOWNIKÓW (USERS) ---
 // =================================================================
 
+// [NEW] Bezpieczny endpoint do logowania
+app.post('/api/login', async (req, res) => {
+    try {
+        const { username, password } = req.body;
+        const sql = 'SELECT * FROM users WHERE username = $1';
+        const result = await pool.query(sql, [username]);
+
+        if (result.rows.length === 0) {
+            // Użytkownik nie istnieje
+            return res.status(401).json({ message: 'Nieprawidłowa nazwa użytkownika lub hasło.' });
+        }
+
+        const user = result.rows[0];
+        // Weryfikacja hasła (w prawdziwej aplikacji użyj bcrypt.compare)
+        if (user.password !== password) {
+            return res.status(401).json({ message: 'Nieprawidłowa nazwa użytkownika lub hasło.' });
+        }
+
+        // Logowanie pomyślne, odsyłamy dane użytkownika BEZ hasła
+        delete user.password;
+        res.json(user);
+
+    } catch (error) {
+        console.error('Błąd [POST /api/login]:', error);
+        res.status(500).json({ message: 'Błąd serwera.' });
+    }
+});
+
+
 // [READ] Pobierz wszystkich użytkowników
 app.get('/api/users', async (req, res) => {
   try {
-    // Nigdy nie wysyłamy haseł do frontendu!
     const result = await pool.query('SELECT id, username, role, subrole FROM users ORDER BY id ASC');
     res.json(result.rows);
   } catch (error) {
@@ -52,7 +75,6 @@ app.get('/api/users', async (req, res) => {
 app.post('/api/users', async (req, res) => {
   try {
     const { id, username, password, role, subRole } = req.body;
-    // UWAGA: W prawdziwej aplikacji hasła powinny być hashowane biblioteką 'bcrypt'
     const sql = 'INSERT INTO users (id, username, password, role, subrole) VALUES ($1, $2, $3, $4, $5) RETURNING id, username, role, subrole';
     const result = await pool.query(sql, [id, username, password, role, subRole]);
     res.status(201).json(result.rows[0]);
@@ -66,7 +88,7 @@ app.post('/api/users', async (req, res) => {
 app.put('/api/users/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const { username, role, subrole } = req.body; // Nie pozwalamy na zmianę hasła tym endpointem
+        const { username, role, subrole } = req.body;
         const sql = 'UPDATE users SET username = $1, role = $2, subrole = $3 WHERE id = $4 RETURNING id, username, role, subrole';
         const result = await pool.query(sql, [username, role, subrole, id]);
         if (result.rowCount === 0) {
@@ -94,7 +116,6 @@ app.delete('/api/users/:id', async (req, res) => {
     }
 });
 
-
 // =================================================================
 // --- ENDPOINTY API DLA ZADAŃ (TASKS) ---
 // =================================================================
@@ -102,22 +123,15 @@ app.delete('/api/users/:id', async (req, res) => {
 // [READ] Pobierz wszystkie zadania wraz z ich komentarzami
 app.get('/api/tasks', async (req, res) => {
   try {
-    // Zaawansowane zapytanie SQL, które łączy zadania z ich komentarzami
     const sql = `
       SELECT
-        t.id,
-        t.title,
-        t.deadline,
-        t.user_id as "assignedTo",
+        t.id, t.title, t.deadline, t.user_id as "assignedTo",
         COALESCE(
-          (SELECT json_agg(
-            json_build_object('id', c.id, 'by', c.author_username, 'text', c.text, 'status', c.status) ORDER BY c.created_at ASC
-          )
-          FROM comments c WHERE c.task_id = t.id),
+          (SELECT json_agg(json_build_object('id', c.id, 'by', c.author_username, 'text', c.text, 'status', c.status) ORDER BY c.created_at ASC)
+           FROM comments c WHERE c.task_id = t.id),
           '[]'::json
         ) as comments
-      FROM tasks t
-      ORDER BY t.id ASC;
+      FROM tasks t ORDER BY t.id ASC;
     `;
     const result = await pool.query(sql);
     res.json(result.rows);
@@ -141,16 +155,14 @@ app.post('/api/tasks', async (req, res) => {
   }
 });
 
-// [UPDATE] Zaktualizuj zadanie
+// Pozostałe endpointy CRUD dla zadań (UPDATE, DELETE) bez zmian...
 app.put('/api/tasks/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const { title, deadline, assignedTo } = req.body;
         const sql = 'UPDATE tasks SET title = $1, deadline = $2, user_id = $3 WHERE id = $4 RETURNING *';
         const result = await pool.query(sql, [title, deadline, assignedTo, id]);
-        if (result.rowCount === 0) {
-            return res.status(404).json({ message: 'Zadanie nie znalezione.' });
-        }
+        if (result.rowCount === 0) { return res.status(404).json({ message: 'Zadanie nie znalezione.' }); }
         res.json(result.rows[0]);
     } catch (error) {
         console.error(`Błąd [PUT /api/tasks/${req.params.id}]:`, error);
@@ -158,14 +170,11 @@ app.put('/api/tasks/:id', async (req, res) => {
     }
 });
 
-// [DELETE] Usuń zadanie
 app.delete('/api/tasks/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const result = await pool.query('DELETE FROM tasks WHERE id = $1', [id]);
-        if (result.rowCount === 0) {
-            return res.status(404).json({ message: 'Zadanie nie znalezione.' });
-        }
+        if (result.rowCount === 0) { return res.status(404).json({ message: 'Zadanie nie znalezione.' }); }
         res.status(204).send();
     } catch (error) {
         console.error(`Błąd [DELETE /api/tasks/${req.params.id}]:`, error);
@@ -195,9 +204,7 @@ app.delete('/api/comments/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const result = await pool.query('DELETE FROM comments WHERE id = $1', [id]);
-        if (result.rowCount === 0) {
-            return res.status(404).json({ message: 'Komentarz nie znaleziony.' });
-        }
+        if (result.rowCount === 0) { return res.status(404).json({ message: 'Komentarz nie znaleziony.' }); }
         res.status(204).send();
     } catch (error) {
         console.error(`Błąd [DELETE /api/comments/${req.params.id}]:`, error);
@@ -205,8 +212,6 @@ app.delete('/api/comments/:id', async (req, res) => {
     }
 });
 
-
-// Uruchomienie serwera
 app.listen(PORT, () => {
   console.log(`Serwer nasłuchuje na porcie ${PORT}`);
 });
