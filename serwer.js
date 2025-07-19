@@ -6,16 +6,13 @@ const rateLimit = require('express-rate-limit');
 
 const app = express();
 
-// --- NOWA LINIA ---
-// Konfiguracja zaufanego proxy. Render działa jako "proxy", więc musimy powiedzieć
-// Expressowi, aby ufał informacjom przesyłanym przez Render (np. o prawdziwym
-// adresie IP użytkownika). Jest to wymagane, aby express-rate-limit działał poprawnie.
+// Konfiguracja zaufanego proxy dla Render (wymagane przez rate-limiter)
 app.set('trust proxy', 1);
 
-// Krok 2: Konfiguracja gotowa na Render
+// Krok 2: Konfiguracja portu
 const PORT = process.env.PORT || 3001;
 
-// Krok 3: Konfiguracja połączenia z bazą danych PostgreSQL
+// Krok 3: Konfiguracja połączenia z bazą danych
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: {
@@ -23,119 +20,193 @@ const pool = new Pool({
   }
 });
 
-// Krok 4: Konfiguracja zabezpieczeń (CORS i Rate Limiter)
+// Krok 4: Konfiguracja middleware
 app.use(cors());
 app.use(express.json());
 
 const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minut
-    max: 100, // Limit 100 zapytań na 15 minut dla jednego adresu IP
+    windowMs: 15 * 60 * 1000,
+    max: 100,
     standardHeaders: true,
     legacyHeaders: false,
-    message: 'Zbyt wiele zapytań z tego IP, spróbuj ponownie za 15 minut.'
 });
-
 app.use('/api', limiter);
 
-// Krok 5: Endpointy API oparte na bazie danych
+// =================================================================
+// --- ENDPOINTY API DLA UŻYTKOWNIKÓW (USERS) ---
+// =================================================================
 
-// --- PEŁNA OBSŁUGA UŻYTKOWNIKÓW (CRUD) ---
-
-// READ: Pobieranie wszystkich użytkowników
+// [READ] Pobierz wszystkich użytkowników
 app.get('/api/users', async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM users ORDER BY id ASC');
+    // Nigdy nie wysyłamy haseł do frontendu!
+    const result = await pool.query('SELECT id, username, role, subrole FROM users ORDER BY id ASC');
     res.json(result.rows);
   } catch (error) {
-    console.error('Błąd przy pobieraniu użytkowników:', error);
+    console.error('Błąd [GET /api/users]:', error);
     res.status(500).json({ message: 'Błąd serwera.' });
   }
 });
 
-// CREATE: Dodawanie nowego użytkownika
+// [CREATE] Stwórz nowego użytkownika
 app.post('/api/users', async (req, res) => {
   try {
-    const { name } = req.body; // Oczekujemy obiektu z polem 'name'
-    if (!name) {
-      return res.status(400).json({ message: 'Nazwa użytkownika jest wymagana.' });
-    }
-    const sql = 'INSERT INTO users (name) VALUES ($1) RETURNING *';
-    const result = await pool.query(sql, [name]);
+    const { id, username, password, role, subRole } = req.body;
+    // UWAGA: W prawdziwej aplikacji hasła powinny być hashowane biblioteką 'bcrypt'
+    const sql = 'INSERT INTO users (id, username, password, role, subrole) VALUES ($1, $2, $3, $4, $5) RETURNING id, username, role, subrole';
+    const result = await pool.query(sql, [id, username, password, role, subRole]);
     res.status(201).json(result.rows[0]);
   } catch (error) {
-    console.error('Błąd przy dodawaniu użytkownika:', error);
+    console.error('Błąd [POST /api/users]:', error);
     res.status(500).json({ message: 'Błąd serwera.' });
   }
 });
 
-
-// --- PEŁNA OBSŁUGA ZADAŃ (CRUD) ---
-
-// READ: Pobieranie wszystkich zadań
-app.get('/api/tasks', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT * FROM tasks ORDER BY id ASC');
-    res.json(result.rows);
-  } catch (error) {
-    console.error('Błąd przy pobieraniu zadań:', error);
-    res.status(500).json({ message: 'Błąd serwera.' });
-  }
-});
-
-// CREATE: Dodawanie nowego zadania
-app.post('/api/tasks', async (req, res) => {
-  try {
-    const { text, user_id } = req.body;
-    if (!text || !user_id) {
-      return res.status(400).json({ message: 'Tekst zadania oraz user_id są wymagane.' });
-    }
-    const sql = 'INSERT INTO tasks (text, completed, user_id) VALUES ($1, $2, $3) RETURNING *';
-    const values = [text, false, user_id];
-    const result = await pool.query(sql, values);
-    res.status(201).json(result.rows[0]);
-  } catch (error) {
-    console.error('Błąd przy dodawaniu zadania:', error);
-    res.status(500).json({ message: 'Błąd serwera.' });
-  }
-});
-
-// UPDATE: Aktualizacja istniejącego zadania
-app.put('/api/tasks/:id', async (req, res) => {
+// [UPDATE] Zaktualizuj użytkownika
+app.put('/api/users/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const { text, completed } = req.body;
-
-        const sql = 'UPDATE tasks SET text = $1, completed = $2 WHERE id = $3 RETURNING *';
-        const values = [text, completed, id];
-        const result = await pool.query(sql, values);
-
-        if (result.rows.length === 0) {
-            return res.status(404).json({ message: 'Nie znaleziono zadania o podanym ID.' });
+        const { username, role, subrole } = req.body; // Nie pozwalamy na zmianę hasła tym endpointem
+        const sql = 'UPDATE users SET username = $1, role = $2, subrole = $3 WHERE id = $4 RETURNING id, username, role, subrole';
+        const result = await pool.query(sql, [username, role, subrole, id]);
+        if (result.rowCount === 0) {
+            return res.status(404).json({ message: 'Użytkownik nie znaleziony.' });
         }
         res.json(result.rows[0]);
     } catch (error) {
-        console.error('Błąd przy aktualizacji zadania:', error);
+        console.error(`Błąd [PUT /api/users/${req.params.id}]:`, error);
         res.status(500).json({ message: 'Błąd serwera.' });
     }
 });
 
-// DELETE: Usuwanie zadania
+// [DELETE] Usuń użytkownika
+app.delete('/api/users/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const result = await pool.query('DELETE FROM users WHERE id = $1', [id]);
+        if (result.rowCount === 0) {
+            return res.status(404).json({ message: 'Użytkownik nie znaleziony.' });
+        }
+        res.status(204).send();
+    } catch (error) {
+        console.error(`Błąd [DELETE /api/users/${req.params.id}]:`, error);
+        res.status(500).json({ message: 'Błąd serwera.' });
+    }
+});
+
+
+// =================================================================
+// --- ENDPOINTY API DLA ZADAŃ (TASKS) ---
+// =================================================================
+
+// [READ] Pobierz wszystkie zadania wraz z ich komentarzami
+app.get('/api/tasks', async (req, res) => {
+  try {
+    // Zaawansowane zapytanie SQL, które łączy zadania z ich komentarzami
+    const sql = `
+      SELECT
+        t.id,
+        t.title,
+        t.deadline,
+        t.user_id as "assignedTo",
+        COALESCE(
+          (SELECT json_agg(
+            json_build_object('id', c.id, 'by', c.author_username, 'text', c.text, 'status', c.status) ORDER BY c.created_at ASC
+          )
+          FROM comments c WHERE c.task_id = t.id),
+          '[]'::json
+        ) as comments
+      FROM tasks t
+      ORDER BY t.id ASC;
+    `;
+    const result = await pool.query(sql);
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Błąd [GET /api/tasks]:', error);
+    res.status(500).json({ message: 'Błąd serwera.' });
+  }
+});
+
+// [CREATE] Stwórz nowe zadanie
+app.post('/api/tasks', async (req, res) => {
+  try {
+    const { id, title, deadline, assignedTo } = req.body;
+    const sql = 'INSERT INTO tasks (id, title, deadline, user_id) VALUES ($1, $2, $3, $4) RETURNING *';
+    const result = await pool.query(sql, [id, title, deadline, assignedTo]);
+    const newTask = { ...result.rows[0], assignedTo: result.rows[0].user_id, comments: [] };
+    res.status(201).json(newTask);
+  } catch (error) {
+    console.error('Błąd [POST /api/tasks]:', error);
+    res.status(500).json({ message: 'Błąd serwera.' });
+  }
+});
+
+// [UPDATE] Zaktualizuj zadanie
+app.put('/api/tasks/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { title, deadline, assignedTo } = req.body;
+        const sql = 'UPDATE tasks SET title = $1, deadline = $2, user_id = $3 WHERE id = $4 RETURNING *';
+        const result = await pool.query(sql, [title, deadline, assignedTo, id]);
+        if (result.rowCount === 0) {
+            return res.status(404).json({ message: 'Zadanie nie znalezione.' });
+        }
+        res.json(result.rows[0]);
+    } catch (error) {
+        console.error(`Błąd [PUT /api/tasks/${req.params.id}]:`, error);
+        res.status(500).json({ message: 'Błąd serwera.' });
+    }
+});
+
+// [DELETE] Usuń zadanie
 app.delete('/api/tasks/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const result = await pool.query('DELETE FROM tasks WHERE id = $1', [id]);
         if (result.rowCount === 0) {
-            return res.status(404).json({ message: 'Nie znaleziono zadania o podanym ID.' });
+            return res.status(404).json({ message: 'Zadanie nie znalezione.' });
         }
         res.status(204).send();
     } catch (error) {
-        console.error('Błąd przy usuwaniu zadania:', error);
+        console.error(`Błąd [DELETE /api/tasks/${req.params.id}]:`, error);
+        res.status(500).json({ message: 'Błąd serwera.' });
+    }
+});
+
+// =================================================================
+// --- ENDPOINTY API DLA KOMENTARZY (COMMENTS) ---
+// =================================================================
+
+// [CREATE] Stwórz nowy komentarz
+app.post('/api/comments', async (req, res) => {
+    try {
+        const { taskId, author, text, status } = req.body;
+        const sql = 'INSERT INTO comments (task_id, author_username, text, status) VALUES ($1, $2, $3, $4) RETURNING *';
+        const result = await pool.query(sql, [taskId, author, text, status]);
+        res.status(201).json(result.rows[0]);
+    } catch (error) {
+        console.error('Błąd [POST /api/comments]:', error);
+        res.status(500).json({ message: 'Błąd serwera.' });
+    }
+});
+
+// [DELETE] Usuń komentarz
+app.delete('/api/comments/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const result = await pool.query('DELETE FROM comments WHERE id = $1', [id]);
+        if (result.rowCount === 0) {
+            return res.status(404).json({ message: 'Komentarz nie znaleziony.' });
+        }
+        res.status(204).send();
+    } catch (error) {
+        console.error(`Błąd [DELETE /api/comments/${req.params.id}]:`, error);
         res.status(500).json({ message: 'Błąd serwera.' });
     }
 });
 
 
-// Krok 6: Uruchomienie serwera
+// Uruchomienie serwera
 app.listen(PORT, () => {
   console.log(`Serwer nasłuchuje na porcie ${PORT}`);
 });
