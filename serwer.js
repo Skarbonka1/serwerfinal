@@ -28,7 +28,7 @@ const limiter = rateLimit({
 app.use('/api', limiter);
 
 // =================================================================
-// --- ENDPOINTY API DLA UŻYTKOWNIKÓW (USERS) ---
+// --- ENDPOINTY API DLA UŻYTKOWNIKÓW (USERS) - bez zmian ---
 // =================================================================
 
 // [NEW] Bezpieczny endpoint do logowania
@@ -37,28 +37,20 @@ app.post('/api/login', async (req, res) => {
         const { username, password } = req.body;
         const sql = 'SELECT * FROM users WHERE username = $1';
         const result = await pool.query(sql, [username]);
-
         if (result.rows.length === 0) {
-            // Użytkownik nie istnieje
             return res.status(401).json({ message: 'Nieprawidłowa nazwa użytkownika lub hasło.' });
         }
-
         const user = result.rows[0];
-        // Weryfikacja hasła (w prawdziwej aplikacji użyj bcrypt.compare)
         if (user.password !== password) {
             return res.status(401).json({ message: 'Nieprawidłowa nazwa użytkownika lub hasło.' });
         }
-
-        // Logowanie pomyślne, odsyłamy dane użytkownika BEZ hasła
         delete user.password;
         res.json(user);
-
     } catch (error) {
         console.error('Błąd [POST /api/login]:', error);
         res.status(500).json({ message: 'Błąd serwera.' });
     }
 });
-
 
 // [READ] Pobierz wszystkich użytkowników
 app.get('/api/users', async (req, res) => {
@@ -116,16 +108,18 @@ app.delete('/api/users/:id', async (req, res) => {
     }
 });
 
+
 // =================================================================
-// --- ENDPOINTY API DLA ZADAŃ (TASKS) ---
+// --- ENDPOINTY API DLA ZADAŃ (TASKS) - ZAKTUALIZOWANE ---
 // =================================================================
 
 // [READ] Pobierz wszystkie zadania wraz z ich komentarzami
 app.get('/api/tasks', async (req, res) => {
   try {
+    // ZMIANA: Dodajemy t.content i t.is_completed do listy pobieranych pól
     const sql = `
       SELECT
-        t.id, t.title, t.deadline, t.user_id as "assignedTo",
+        t.id, t.title, t.content, t.is_completed, t.deadline, t.user_id as "assignedTo",
         COALESCE(
           (SELECT json_agg(json_build_object('id', c.id, 'by', c.author_username, 'text', c.text, 'status', c.status) ORDER BY c.created_at ASC)
            FROM comments c WHERE c.task_id = t.id),
@@ -144,9 +138,10 @@ app.get('/api/tasks', async (req, res) => {
 // [CREATE] Stwórz nowe zadanie
 app.post('/api/tasks', async (req, res) => {
   try {
-    const { id, title, deadline, assignedTo } = req.body;
-    const sql = 'INSERT INTO tasks (id, title, deadline, user_id) VALUES ($1, $2, $3, $4) RETURNING *';
-    const result = await pool.query(sql, [id, title, deadline, assignedTo]);
+    // ZMIANA: Odbieramy 'content' z ciała zapytania. 'is_completed' ma wartość domyślną w bazie.
+    const { id, title, content, deadline, assignedTo } = req.body;
+    const sql = 'INSERT INTO tasks (id, title, content, deadline, user_id) VALUES ($1, $2, $3, $4, $5) RETURNING *';
+    const result = await pool.query(sql, [id, title, content, deadline, assignedTo]);
     const newTask = { ...result.rows[0], assignedTo: result.rows[0].user_id, comments: [] };
     res.status(201).json(newTask);
   } catch (error) {
@@ -155,14 +150,17 @@ app.post('/api/tasks', async (req, res) => {
   }
 });
 
-// Pozostałe endpointy CRUD dla zadań (UPDATE, DELETE) bez zmian...
+// [UPDATE] Zaktualizuj zadanie
 app.put('/api/tasks/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const { title, deadline, assignedTo } = req.body;
-        const sql = 'UPDATE tasks SET title = $1, deadline = $2, user_id = $3 WHERE id = $4 RETURNING *';
-        const result = await pool.query(sql, [title, deadline, assignedTo, id]);
-        if (result.rowCount === 0) { return res.status(404).json({ message: 'Zadanie nie znalezione.' }); }
+        // ZMIANA: Pozwalamy na aktualizację 'content' i 'is_completed'
+        const { title, content, is_completed, deadline, assignedTo } = req.body;
+        const sql = 'UPDATE tasks SET title = $1, content = $2, is_completed = $3, deadline = $4, user_id = $5 WHERE id = $6 RETURNING *';
+        const result = await pool.query(sql, [title, content, is_completed, deadline, assignedTo, id]);
+        if (result.rowCount === 0) {
+            return res.status(404).json({ message: 'Zadanie nie znalezione.' });
+        }
         res.json(result.rows[0]);
     } catch (error) {
         console.error(`Błąd [PUT /api/tasks/${req.params.id}]:`, error);
@@ -170,11 +168,14 @@ app.put('/api/tasks/:id', async (req, res) => {
     }
 });
 
+// [DELETE] Usuń zadanie (bez zmian)
 app.delete('/api/tasks/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const result = await pool.query('DELETE FROM tasks WHERE id = $1', [id]);
-        if (result.rowCount === 0) { return res.status(404).json({ message: 'Zadanie nie znalezione.' }); }
+        if (result.rowCount === 0) {
+            return res.status(404).json({ message: 'Zadanie nie znalezione.' });
+        }
         res.status(204).send();
     } catch (error) {
         console.error(`Błąd [DELETE /api/tasks/${req.params.id}]:`, error);
@@ -183,7 +184,7 @@ app.delete('/api/tasks/:id', async (req, res) => {
 });
 
 // =================================================================
-// --- ENDPOINTY API DLA KOMENTARZY (COMMENTS) ---
+// --- ENDPOINTY API DLA KOMENTARZY (COMMENTS) - bez zmian ---
 // =================================================================
 
 // [CREATE] Stwórz nowy komentarz
@@ -204,7 +205,9 @@ app.delete('/api/comments/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const result = await pool.query('DELETE FROM comments WHERE id = $1', [id]);
-        if (result.rowCount === 0) { return res.status(404).json({ message: 'Komentarz nie znaleziony.' }); }
+        if (result.rowCount === 0) {
+            return res.status(404).json({ message: 'Komentarz nie znaleziony.' });
+        }
         res.status(204).send();
     } catch (error) {
         console.error(`Błąd [DELETE /api/comments/${req.params.id}]:`, error);
@@ -212,6 +215,8 @@ app.delete('/api/comments/:id', async (req, res) => {
     }
 });
 
+
+// Uruchomienie serwera
 app.listen(PORT, () => {
   console.log(`Serwer nasłuchuje na porcie ${PORT}`);
 });

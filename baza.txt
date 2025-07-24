@@ -1,0 +1,66 @@
+Komendy CREATE TABLE i INSERT dla znormalizowanej bazy
+Połącz się ze swoją bazą danych na Render za pomocą psql, a następnie wklej i wykonaj cały poniższy blok kodu.
+
+-- Usuwamy stare tabele w odpowiedniej kolejności, aby uniknąć błędów klucza obcego.
+DROP TABLE IF EXISTS comments;
+DROP TABLE IF EXISTS tasks;
+DROP TABLE IF EXISTS users;
+
+-- Tabela użytkowników (bez zmian)
+CREATE TABLE users (
+  id BIGINT PRIMARY KEY,
+  username VARCHAR(255) NOT NULL UNIQUE,
+  password VARCHAR(255) NOT NULL,
+  role VARCHAR(50) NOT NULL,
+  subrole VARCHAR(50)
+);
+
+-- Tabela zadań (już bez kolumny 'comments')
+CREATE TABLE tasks (
+  id BIGINT PRIMARY KEY,
+  title VARCHAR(255) NOT NULL,
+  deadline TIMESTAMP WITH TIME ZONE,
+  user_id BIGINT,
+  CONSTRAINT fk_user
+      FOREIGN KEY(user_id)
+	  REFERENCES users(id)
+	  ON DELETE SET NULL
+);
+
+-- NOWA TABELA: Komentarze
+CREATE TABLE comments (
+  id SERIAL PRIMARY KEY,
+  text TEXT NOT NULL,
+  status VARCHAR(50) DEFAULT 'normal',
+  author_username VARCHAR(255) NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  
+  task_id BIGINT NOT NULL,
+  CONSTRAINT fk_task
+      FOREIGN KEY(task_id)
+	  REFERENCES tasks(id)
+	  ON DELETE CASCADE
+);
+
+-- --- WSTAWIANIE DANYCH ---
+
+-- Użytkownicy (z poprawioną składnią - dodano NULL)
+INSERT INTO users (id, username, password, role, subrole) VALUES
+(1, 'szef1', '123', 'szef', NULL),\q
+(2, 'szef2', '123', 'szef', NULL),
+(3, 'kierownik1', '123', 'kierownik', NULL),
+(4, 'laser', '123', 'pracownik', 'laserownia'),
+(5, 'marketing', '123', 'pracownik', 'marketing'),
+(6, 'grafik', '123', 'pracownik', 'grafik'),
+(1752272231138, 'testMarketing1', '123', 'pracownik', 'marketing');
+
+-- Zadania (bez zmian)
+INSERT INTO tasks (id, title, user_id, deadline) VALUES
+(1, 'Projekt logo dla klienta X', 6, '2025-07-15T23:59'),
+(1752272278437, 'test1ZadanieDlaMarketing', 1752272231138, '2025-04-30T12:00');
+
+-- Komentarze (teraz wstawiane do osobnej tabeli)
+INSERT INTO comments (task_id, author_username, text, status) VALUES
+(1, 'grafik', 'Rozpocząłem pracę nad koncepcją.', 'normal'),
+(1752272278437, 'testMarketing1', 'brak materiałów', 'ważne');
+
