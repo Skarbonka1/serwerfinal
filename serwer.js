@@ -13,9 +13,13 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-// Konfiguracja CORS
+// ZMIANA: Dodajemy adres Twojej aplikacji na Vercel do listy dozwolonych źródeł
 const corsOptions = {
-    origin: ['http://localhost:5173', 'http://localhost:3000']
+    origin: [
+        'http://localhost:5173', 
+        'http://localhost:3000', 
+        'https://frontend-final-black.vercel.app' // <-- TWOJA APLIKACJA NA VERCEL
+    ]
 };
 app.use(cors(corsOptions));
 app.use(express.json());
