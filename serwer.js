@@ -203,6 +203,76 @@ app.delete('/api/comments/:id', async (req, res) => {
     }
 });
 
+
+// =================================================================
+// --- ENDPOINTY API DLA STATYSTYK SPRZEDAŻY (SALES_STATS) ---
+// =================================================================
+
+// [READ] Pobierz wszystkie statystyki
+app.get('/api/statystyki', async (req, res) => {
+  try {
+    // Pobieramy wszystkie dane, posortowane chronologicznie dla lepszej czytelności
+    const result = await pool.query('SELECT * FROM statystyka_sprzedazy ORDER BY rok, miesiac ASC');
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Błąd [GET /api/statystyki]:', error);
+    res.status(500).json({ message: 'Błąd serwera.' });
+  }
+});
+
+// [UPDATE] Zaktualizuj statystykę (np. dodaj ilość sprzedaży)
+app.put('/api/statystyki/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        // Oczekujemy, że w ciele żądania przyjdzie nowa ilość
+        const { ilosc } = req.body;
+
+        // Sprawdzamy, czy 'ilosc' została podana
+        if (ilosc === undefined) {
+            return res.status(400).json({ message: 'Brakująca wartość "ilosc" w zapytaniu.' });
+        }
+
+        const sql = 'UPDATE statystyka_sprzedazy SET ilosc = $1 WHERE id = $2 RETURNING *';
+        const result = await pool.query(sql, [ilosc, id]);
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({ message: 'Rekord statystyki nie został znaleziony.' });
+        }
+        res.json(result.rows[0]);
+    } catch (error) {
+        console.error(`Błąd [PUT /api/statystyki/${req.params.id}]:`, error);
+        res.status(500).json({ message: 'Błąd serwera.' });
+    }
+});
+
+// [CREATE] Stwórz nowy wpis w statystykach
+app.post('/api/statystyki', async (req, res) => {
+  try {
+    const { rok, miesiac, ilosc } = req.body;
+    const sql = 'INSERT INTO statystyka_sprzedazy (rok, miesiac, ilosc) VALUES ($1, $2, $3) RETURNING *';
+    const result = await pool.query(sql, [rok, miesiac, ilosc]);
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    console.error('Błąd [POST /api/statystyki]:', error);
+    res.status(500).json({ message: 'Błąd serwera.' });
+  }
+});
+
+// [DELETE] Usuń wpis ze statystyk
+app.delete('/api/statystyki/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const result = await pool.query('DELETE FROM statystyka_sprzedazy WHERE id = $1', [id]);
+        if (result.rowCount === 0) {
+            return res.status(404).json({ message: 'Rekord statystyki nie został znaleziony.' });
+        }
+        res.status(204).send(); // 204 No Content - standardowa odpowiedź po pomyślnym usunięciu
+    } catch (error) {
+        console.error(`Błąd [DELETE /api/statystyki/${req.params.id}]:`, error);
+        res.status(500).json({ message: 'Błąd serwera.' });
+    }
+});
+
 app.listen(PORT, () => {
   console.log(`Serwer nasłuchuje na porcie ${PORT}`);
 });
