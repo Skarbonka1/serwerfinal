@@ -18,7 +18,8 @@ const corsOptions = {
     origin: [
         'http://localhost:5173', 
         'http://localhost:3000', 
-        'https://frontend-final-black.vercel.app' // <-- TWOJA APLIKACJA NA VERCEL
+        'https://frontend-final-black.vercel.app',
+        'https://serwer-for-render.onrender.com'
     ]
 };
 app.use(cors(corsOptions));
@@ -266,7 +267,7 @@ app.delete('/api/statystyki/:id', async (req, res) => {
         if (result.rowCount === 0) {
             return res.status(404).json({ message: 'Rekord statystyki nie został znaleziony.' });
         }
-        res.status(204).send(); // 204 No Content - standardowa odpowiedź po pomyślnym usunięciu
+        res.status(204).send(); 
     } catch (error) {
         console.error(`Błąd [DELETE /api/statystyki/${req.params.id}]:`, error);
         res.status(500).json({ message: 'Błąd serwera.' });
