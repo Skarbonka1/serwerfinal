@@ -209,24 +209,11 @@ app.delete('/api/comments/:id', async (req, res) => {
 // --- ENDPOINTY API DLA STATYSTYK SPRZEDAŻY (SALES_STATS) ---
 // =================================================================
 
-// [READ] Pobierz wszystkie statystyki (z opcjonalnym filtrowaniem po rodzaju produktu)
+// [READ] Pobierz wszystkie statystyki
 app.get('/api/statystyki', async (req, res) => {
   try {
-    // Sprawdzamy, czy w zapytaniu jest filtr na rodzaj produktu
-    const { rodzaj_produktu } = req.query;
-    
-    let sql = 'SELECT * FROM statystyka_sprzedazy';
-    const params = [];
-
-    if (rodzaj_produktu) {
-      sql += ' WHERE rodzaj_produktu = $1';
-      params.push(rodzaj_produktu);
-    }
-
-    // Dodajemy sortowanie, aby dane były zawsze w tej samej, logicznej kolejności
-    sql += ' ORDER BY rok, rodzaj_produktu, miesiac ASC';
-
-    const result = await pool.query(sql, params);
+    // Pobieramy wszystkie dane, posortowane chronologicznie dla lepszej czytelności
+    const result = await pool.query('SELECT * FROM statystyka_sprzedazy ORDER BY rok, miesiac ASC');
     res.json(result.rows);
   } catch (error) {
     console.error('Błąd [GET /api/statystyki]:', error);
@@ -234,14 +221,14 @@ app.get('/api/statystyki', async (req, res) => {
   }
 });
 
-// [UPDATE] Zaktualizuj ilość w konkretnym wpisie statystyki
-// Identyfikujemy wiersz po jego unikalnym ID
+// [UPDATE] Zaktualizuj statystykę (np. dodaj ilość sprzedaży)
 app.put('/api/statystyki/:id', async (req, res) => {
     try {
         const { id } = req.params;
         // Oczekujemy, że w ciele żądania przyjdzie nowa ilość
         const { ilosc } = req.body;
 
+        // Sprawdzamy, czy 'ilosc' została podana
         if (ilosc === undefined) {
             return res.status(400).json({ message: 'Brakująca wartość "ilosc" w zapytaniu.' });
         }
@@ -259,30 +246,20 @@ app.put('/api/statystyki/:id', async (req, res) => {
     }
 });
 
-// [CREATE] Stwórz nowy wpis w statystykach (teraz z rodzajem produktu)
+// [CREATE] Stwórz nowy wpis w statystykach
 app.post('/api/statystyki', async (req, res) => {
   try {
-    // Oczekujemy teraz również na 'rodzaj_produktu'
-    const { rok, miesiac, ilosc, rodzaj_produktu } = req.body;
-
-    if (!rodzaj_produktu) {
-        return res.status(400).json({ message: 'Brakująca wartość "rodzaj_produktu" w zapytaniu.' });
-    }
-
-    const sql = 'INSERT INTO statystyka_sprzedazy (rok, miesiac, ilosc, rodzaj_produktu) VALUES ($1, $2, $3, $4) RETURNING *';
-    const result = await pool.query(sql, [rok, miesiac, ilosc, rodzaj_produktu]);
+    const { rok, miesiac, ilosc } = req.body;
+    const sql = 'INSERT INTO statystyka_sprzedazy (rok, miesiac, ilosc) VALUES ($1, $2, $3) RETURNING *';
+    const result = await pool.query(sql, [rok, miesiac, ilosc]);
     res.status(201).json(result.rows[0]);
   } catch (error) {
     console.error('Błąd [POST /api/statystyki]:', error);
-    // Dodajemy bardziej szczegółową obsługę błędu duplikatu
-    if (error.code === '23505') { // Kod błędu dla naruszenia unikalności (primary key)
-        return res.status(409).json({ message: 'Wpis dla tego produktu, roku i miesiąca już istnieje.' });
-    }
     res.status(500).json({ message: 'Błąd serwera.' });
   }
 });
 
-// [DELETE] Usuń wpis ze statystyk (działa tak jak wcześniej, po ID)
+// [DELETE] Usuń wpis ze statystyk
 app.delete('/api/statystyki/:id', async (req, res) => {
     try {
         const { id } = req.params;
@@ -295,4 +272,8 @@ app.delete('/api/statystyki/:id', async (req, res) => {
         console.error(`Błąd [DELETE /api/statystyki/${req.params.id}]:`, error);
         res.status(500).json({ message: 'Błąd serwera.' });
     }
+});
+
+app.listen(PORT, () => {
+  console.log(`Serwer nasłuchuje na porcie ${PORT}`);
 });
