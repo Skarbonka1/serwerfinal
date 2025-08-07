@@ -165,10 +165,10 @@ app.post('/api/tasks', async (req, res) => {
     try {
         await client.query('BEGIN'); // Rozpoczęcie transakcji
         
-        // ZAPYTANIE Z POPRAWKĄ: Używamy nextval() z automatycznym wykryciem sekwencji
+        // ZAPYTANIE Z POPRAWKĄ: Używamy MAX(id) + 1 do wygenerowania nowego ID
         const taskSql = `
             INSERT INTO tasks (id, title, content_state, creator_id, leader_id, deadline, importance, publication_date) 
-            VALUES (nextval(pg_get_serial_sequence('tasks', 'id')), $1, $2, $3, $4, $5, $6, NOW()) RETURNING *;
+            VALUES (COALESCE((SELECT MAX(id) FROM tasks), 0) + 1, $1, $2, $3, $4, $5, $6, NOW()) RETURNING *;
         `;
         const params = [
             title,
