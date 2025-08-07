@@ -126,7 +126,7 @@ app.delete('/api/users/:id', async (req, res) => {
 // --- ZAKTUALIZOWANE ENDPOINTY API DLA ZADAŃ (TASKS) ---
 // =================================================================
 
-// [ZAKTUALIZOWANY] Pobierz zadania dla widoku kalendarza (bardziej wydajna wersja)
+// [BEZ ZMIAN] Pobierz zadania dla widoku kalendarza
 app.get('/api/tasks/calendar', async (req, res) => {
     try {
         const sql = `
@@ -165,15 +165,14 @@ app.post('/api/tasks', async (req, res) => {
     try {
         await client.query('BEGIN'); // Rozpoczęcie transakcji
         
-        // ZAPYTANIE Z POPRAWKĄ: Używamy DEFAULT dla id aby baza danych sama je uzupełni.
-        // Dodano publication_date i jawną konwersję typów.
+        // ZAPYTANIE Z POPRAWKĄ: Jawnie podajemy DEFAULT dla 'id'
         const taskSql = `
             INSERT INTO tasks (id, title, content_state, creator_id, leader_id, deadline, importance, publication_date) 
             VALUES (DEFAULT, $1, $2, $3, $4, $5, $6, NOW()) RETURNING *;
         `;
         const params = [
             title,
-            content_state, // Baza danych oczekuje teraz typu TEXT, więc to zadziała
+            content_state,
             parseInt(creator_id, 10),
             leader_id ? parseInt(leader_id, 10) : null,
             deadline,
@@ -193,7 +192,6 @@ app.post('/api/tasks', async (req, res) => {
         res.status(201).json(newTask);
 
         // Wyślij powiadomienia (poza transakcją)
-        console.log('Rozpoczynanie wysyłki powiadomień...');
         const tokensResult = await pool.query('SELECT fcm_token FROM users WHERE id = ANY($1::bigint[]) AND fcm_token IS NOT NULL', [assignedUserIds]);
         const tokens = tokensResult.rows.map(row => row.fcm_token);
         if (tokens.length > 0) {
@@ -204,13 +202,7 @@ app.post('/api/tasks', async (req, res) => {
                 },
                 tokens: tokens,
             };
-            const response = await admin.messaging().sendEachForMulticast(message);
-            console.log(`✅ Powiadomienia wysłane pomyślnie do ${response.successCount} urządzeń.`);
-            if (response.failureCount > 0) {
-                console.log(`❌ Nie udało się wysłać powiadomień do ${response.failureCount} urządzeń.`);
-            }
-        } else {
-            console.log("Brak tokenów FCM dla przypisanych użytkowników. Pomijanie wysyłki powiadomień.");
+            await admin.messaging().sendEachForMulticast(message);
         }
     } catch (error) {
         await client.query('ROLLBACK'); // Wycofanie transakcji w razie błędu
@@ -222,7 +214,7 @@ app.post('/api/tasks', async (req, res) => {
 });
 
 
-// [BEZ ZMIAN] Endpoint do zapisywania postępu zadania
+// [BEZ ZMIAN] Pozostałe endpointy
 app.put('/api/tasks/:id/save', async (req, res) => {
     try {
         const { id } = req.params;
@@ -234,12 +226,10 @@ app.put('/api/tasks/:id/save', async (req, res) => {
         }
         res.json(result.rows[0]);
     } catch (error) {
-        console.error(`Błąd [PUT /api/tasks/${req.params.id}/save]:`, error);
         res.status(500).json({ message: 'Błąd serwera.' });
     }
 });
 
-// [BEZ ZMIAN] Endpoint do zmiany terminu zadania
 app.put('/api/tasks/:id/deadline', async (req, res) => {
     try {
         const { id } = req.params;
@@ -251,22 +241,19 @@ app.put('/api/tasks/:id/deadline', async (req, res) => {
         }
         res.json(result.rows[0]);
     } catch (error) {
-        console.error(`Błąd [PUT /api/tasks/${req.params.id}/deadline]:`, error);
         res.status(500).json({ message: 'Błąd serwera.' });
     }
 });
 
-// [BEZ ZMIAN] Endpoint do usuwania zadań
 app.delete('/api/tasks/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const result = await pool.query('DELETE FROM tasks WHERE id = $1', [id]);
         if (result.rowCount === 0) {
-            return res.status(404).json({ message: 'Zadanie nie znalezione.' });
+            return res.status(404).json({ message: 'Użytkownik nie znaleziony.' });
         }
         res.status(204).send();
     } catch (error) {
-        console.error(`Błąd [DELETE /api/tasks/${req.params.id}]:`, error);
         res.status(500).json({ message: 'Błąd serwera.' });
     }
 });
@@ -288,7 +275,6 @@ app.get('/api/statystyki', async (req, res) => {
     const result = await pool.query(sql, params);
     res.json(result.rows);
   } catch (error) {
-    console.error('Błąd [GET /api/statystyki]:', error);
     res.status(500).json({ message: 'Błąd serwera.' });
   }
 });
@@ -307,7 +293,6 @@ app.put('/api/statystyki/:id', async (req, res) => {
         }
         res.json(result.rows[0]);
     } catch (error) {
-        console.error(`Błąd [PUT /api/statystyki/${req.params.id}]:`, error);
         res.status(500).json({ message: 'Błąd serwera.' });
     }
 });
@@ -322,7 +307,6 @@ app.post('/api/statystyki', async (req, res) => {
     const result = await pool.query(sql, [rok, miesiac, ilosc, rodzaj_produktu]);
     res.status(201).json(result.rows[0]);
   } catch (error) {
-    console.error('Błąd [POST /api/statystyki]:', error);
     if (error.code === '23505') {
         return res.status(409).json({ message: 'Wpis dla tego produktu, roku i miesiąca już istnieje.' });
     }
