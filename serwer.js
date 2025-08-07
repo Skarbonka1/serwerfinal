@@ -3,7 +3,6 @@ const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
 const rateLimit = require('express-rate-limit');
-// NOWOŚĆ: Importujemy Firebase Admin SDK do wysyłki powiadomień
 const admin = require('firebase-admin');
 
 // =================================================================
@@ -34,10 +33,9 @@ const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 300, standardHeaders:
 app.use('/api', limiter);
 
 // =================================================================
-// --- NOWOŚĆ: KONFIGURACJA FIREBASE ADMIN SDK ---
+// --- KONFIGURACJA FIREBASE ADMIN SDK ---
 // =================================================================
 try {
-    // Render odczyta zawartość pliku klucza ze zmiennej środowiskowej
     const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY);
     
     admin.initializeApp({
@@ -81,7 +79,7 @@ app.get('/api/users', async (req, res) => {
   }
 });
 
-// [NOWOŚĆ] Endpoint do zapisywania tokenu FCM użytkownika
+// [BEZ ZMIAN] Endpoint do zapisywania tokenu FCM użytkownika
 app.post('/api/register-token', async (req, res) => {
     const { userId, token } = req.body;
     if (!userId || !token) {
@@ -134,8 +132,8 @@ app.get('/api/tasks/calendar', async (req, res) => {
         const sql = `
             SELECT 
                 t.*,
-                creator.username as "creatorName",
-                leader.username as "leaderName",
+                COALESCE(creator.username, 'Nieznany') as "creatorName",
+                COALESCE(leader.username, 'Brak') as "leaderName",
                 COALESCE(asgn.users, '[]'::json) as "assignedUsers"
             FROM tasks t
             LEFT JOIN users creator ON t.creator_id = creator.id
@@ -157,7 +155,7 @@ app.get('/api/tasks/calendar', async (req, res) => {
 });
 
 
-// [NOWY] Endpoint do tworzenia zadania i wysyłania powiadomień
+// [ZAKTUALIZOWANY] Endpoint do tworzenia zadania i wysyłania powiadomień
 app.post('/api/tasks', async (req, res) => {
     const { title, content_state, creator_id, leader_id, deadline, importance, assignedUserIds } = req.body;
     if (!assignedUserIds || assignedUserIds.length === 0) {
@@ -166,21 +164,34 @@ app.post('/api/tasks', async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN'); // Rozpoczęcie transakcji
+        
+        // ZAPYTANIE Z POPRAWKĄ: Dodano publication_date i jawną konwersję typów
         const taskSql = `
-            INSERT INTO tasks (title, content_state, creator_id, leader_id, deadline, importance) 
-            VALUES ($1, $2, $3, $4, $5, $6) RETURNING *;
+            INSERT INTO tasks (title, content_state, creator_id, leader_id, deadline, importance, publication_date) 
+            VALUES ($1, $2, $3, $4, $5, $6, NOW()) RETURNING *;
         `;
-        const taskResult = await client.query(taskSql, [title, content_state, creator_id, leader_id, deadline, importance]);
+        const params = [
+            title,
+            content_state, // Teraz zostanie poprawnie zapisany jako TEXT
+            parseInt(creator_id, 10),
+            leader_id ? parseInt(leader_id, 10) : null,
+            deadline,
+            importance
+        ];
+        
+        const taskResult = await client.query(taskSql, params);
         const newTask = taskResult.rows[0];
+
         const assignmentPromises = assignedUserIds.map(userId => {
             const assignmentSql = 'INSERT INTO task_assignments (task_id, user_id) VALUES ($1, $2)';
             return client.query(assignmentSql, [newTask.id, userId]);
         });
         await Promise.all(assignmentPromises);
+        
         await client.query('COMMIT'); // Zatwierdzenie transakcji
         res.status(201).json(newTask);
 
-        // Wyślij powiadomienia (poza transakcją, po pomyślnej odpowiedzi do klienta)
+        // Wyślij powiadomienia (poza transakcją)
         console.log('Rozpoczynanie wysyłki powiadomień...');
         const tokensResult = await pool.query('SELECT fcm_token FROM users WHERE id = ANY($1::bigint[]) AND fcm_token IS NOT NULL', [assignedUserIds]);
         const tokens = tokensResult.rows.map(row => row.fcm_token);
@@ -210,7 +221,7 @@ app.post('/api/tasks', async (req, res) => {
 });
 
 
-// [NOWY] Endpoint do zapisywania postępu zadania (przycisk "Save")
+// [BEZ ZMIAN] Endpoint do zapisywania postępu zadania
 app.put('/api/tasks/:id/save', async (req, res) => {
     try {
         const { id } = req.params;
@@ -227,7 +238,7 @@ app.put('/api/tasks/:id/save', async (req, res) => {
     }
 });
 
-// [NOWY] Endpoint do zmiany terminu zadania
+// [BEZ ZMIAN] Endpoint do zmiany terminu zadania
 app.put('/api/tasks/:id/deadline', async (req, res) => {
     try {
         const { id } = req.params;
@@ -244,12 +255,10 @@ app.put('/api/tasks/:id/deadline', async (req, res) => {
     }
 });
 
-// [NOWY] Endpoint do usuwania zadań
+// [BEZ ZMIAN] Endpoint do usuwania zadań
 app.delete('/api/tasks/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        // Dzięki "ON DELETE CASCADE" w bazie danych, usunięcie zadania
-        // automatycznie usunie powiązane z nim przypisania z tabeli task_assignments.
         const result = await pool.query('DELETE FROM tasks WHERE id = $1', [id]);
         if (result.rowCount === 0) {
             return res.status(404).json({ message: 'Zadanie nie znalezione.' });
@@ -265,7 +274,6 @@ app.delete('/api/tasks/:id', async (req, res) => {
 // --- ENDPOINTY DLA STATYSTYK (BEZ ZMIAN) ---
 // =================================================================
 
-// [BEZ ZMIAN] Pobierz wszystkie statystyki
 app.get('/api/statystyki', async (req, res) => {
   try {
     const { rodzaj_produktu } = req.query;
@@ -284,7 +292,6 @@ app.get('/api/statystyki', async (req, res) => {
   }
 });
 
-// [BEZ ZMIAN] Zaktualizuj ilość w statystyce
 app.put('/api/statystyki/:id', async (req, res) => {
     try {
         const { id } = req.params;
@@ -304,7 +311,6 @@ app.put('/api/statystyki/:id', async (req, res) => {
     }
 });
 
-// [BEZ ZMIAN] Stwórz nowy wpis w statystykach
 app.post('/api/statystyki', async (req, res) => {
   try {
     const { rok, miesiac, ilosc, rodzaj_produktu } = req.body;
