@@ -165,14 +165,15 @@ app.post('/api/tasks', async (req, res) => {
     try {
         await client.query('BEGIN'); // Rozpoczęcie transakcji
         
-        // ZAPYTANIE Z POPRAWKĄ: Dodano publication_date i jawną konwersję typów
+        // ZAPYTANIE Z POPRAWKĄ: Nie podajemy 'id', baza danych sama je uzupełni.
+        // Dodano publication_date i jawną konwersję typów.
         const taskSql = `
             INSERT INTO tasks (title, content_state, creator_id, leader_id, deadline, importance, publication_date) 
             VALUES ($1, $2, $3, $4, $5, $6, NOW()) RETURNING *;
         `;
         const params = [
             title,
-            content_state, // Teraz zostanie poprawnie zapisany jako TEXT
+            content_state, // Baza danych oczekuje teraz typu TEXT, więc to zadziała
             parseInt(creator_id, 10),
             leader_id ? parseInt(leader_id, 10) : null,
             deadline,
