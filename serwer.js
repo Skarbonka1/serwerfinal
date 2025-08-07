@@ -165,11 +165,11 @@ app.post('/api/tasks', async (req, res) => {
     try {
         await client.query('BEGIN'); // Rozpoczęcie transakcji
         
-        // ZAPYTANIE Z POPRAWKĄ: Nie podajemy 'id', baza danych sama je uzupełni.
+        // ZAPYTANIE Z POPRAWKĄ: Używamy DEFAULT dla id aby baza danych sama je uzupełni.
         // Dodano publication_date i jawną konwersję typów.
         const taskSql = `
-            INSERT INTO tasks (title, content_state, creator_id, leader_id, deadline, importance, publication_date) 
-            VALUES ($1, $2, $3, $4, $5, $6, NOW()) RETURNING *;
+            INSERT INTO tasks (id, title, content_state, creator_id, leader_id, deadline, importance, publication_date) 
+            VALUES (DEFAULT, $1, $2, $3, $4, $5, $6, NOW()) RETURNING *;
         `;
         const params = [
             title,
