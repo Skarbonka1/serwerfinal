@@ -19,7 +19,6 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-// ZMIANA: Dodajemy adres Twojej aplikacji na Vercel do listy dozwolonych źródeł
 const corsOptions = {
     origin: [
         'http://localhost:5173', 
@@ -37,13 +36,8 @@ app.use('/api', limiter);
 // =================================================================
 // --- NOWOŚĆ: KONFIGURACJA FIREBASE ADMIN SDK ---
 // =================================================================
-
-// WAŻNE: Musisz pobrać plik klucza prywatnego z konsoli Firebase i umieścić go na serwerze.
-// W ustawieniach Render.com musisz dodać ten plik i ustawić zmienną środowiskową.
-// Dokumentacja Render: https://render.com/docs/secret-files
-
 try {
-    // Render.com odczyta zawartość pliku klucza ze zmiennej środowiskowej
+    // Render odczyta zawartość pliku klucza ze zmiennej środowiskowej
     const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY);
     
     admin.initializeApp({
@@ -102,8 +96,6 @@ app.post('/api/register-token', async (req, res) => {
     }
 });
 
-
-// Pozostałe endpointy dla użytkowników (CREATE, UPDATE, DELETE) pozostają bez zmian...
 // [BEZ ZMIAN] Stwórz nowego użytkownika
 app.post('/api/users', async (req, res) => {
   try {
@@ -136,20 +128,24 @@ app.delete('/api/users/:id', async (req, res) => {
 // --- ZAKTUALIZOWANE ENDPOINTY API DLA ZADAŃ (TASKS) ---
 // =================================================================
 
-// [ZAKTUALIZOWANY] Pobierz zadania dla widoku kalendarza (z uwzględnieniem przypisanych użytkowników)
+// [ZAKTUALIZOWANY] Pobierz zadania dla widoku kalendarza (bardziej wydajna wersja)
 app.get('/api/tasks/calendar', async (req, res) => {
-    // TODO: W przyszłości można dodać filtrowanie po dacie (req.query)
     try {
         const sql = `
             SELECT 
                 t.*,
-                (SELECT username FROM users WHERE id = t.creator_id) as "creatorName",
-                (SELECT username FROM users WHERE id = t.leader_id) as "leaderName",
-                COALESCE(
-                    (SELECT json_agg(u.username) FROM task_assignments ta JOIN users u ON u.id = ta.user_id WHERE ta.task_id = t.id),
-                    '[]'::json
-                ) as "assignedUsers"
+                creator.username as "creatorName",
+                leader.username as "leaderName",
+                COALESCE(asgn.users, '[]'::json) as "assignedUsers"
             FROM tasks t
+            LEFT JOIN users creator ON t.creator_id = creator.id
+            LEFT JOIN users leader ON t.leader_id = leader.id
+            LEFT JOIN (
+                SELECT ta.task_id, json_agg(u.username) as users
+                FROM task_assignments ta
+                JOIN users u ON u.id = ta.user_id
+                GROUP BY ta.task_id
+            ) asgn ON asgn.task_id = t.id
             ORDER BY t.publication_date DESC;
         `;
         const result = await pool.query(sql);
@@ -164,39 +160,30 @@ app.get('/api/tasks/calendar', async (req, res) => {
 // [NOWY] Endpoint do tworzenia zadania i wysyłania powiadomień
 app.post('/api/tasks', async (req, res) => {
     const { title, content_state, creator_id, leader_id, deadline, importance, assignedUserIds } = req.body;
-
-    // Walidacja, czy mamy przypisanych użytkowników
     if (!assignedUserIds || assignedUserIds.length === 0) {
         return res.status(400).json({ message: 'Musisz przypisać zadanie do co najmniej jednego użytkownika.' });
     }
-
     const client = await pool.connect();
     try {
         await client.query('BEGIN'); // Rozpoczęcie transakcji
-
-        // 1. Stwórz zadanie w tabeli 'tasks'
         const taskSql = `
             INSERT INTO tasks (title, content_state, creator_id, leader_id, deadline, importance) 
             VALUES ($1, $2, $3, $4, $5, $6) RETURNING *;
         `;
         const taskResult = await client.query(taskSql, [title, content_state, creator_id, leader_id, deadline, importance]);
         const newTask = taskResult.rows[0];
-
-        // 2. Stwórz przypisania w tabeli 'task_assignments'
         const assignmentPromises = assignedUserIds.map(userId => {
             const assignmentSql = 'INSERT INTO task_assignments (task_id, user_id) VALUES ($1, $2)';
             return client.query(assignmentSql, [newTask.id, userId]);
         });
         await Promise.all(assignmentPromises);
-
         await client.query('COMMIT'); // Zatwierdzenie transakcji
         res.status(201).json(newTask);
 
-        // 3. Wyślij powiadomienia (poza transakcją, po pomyślnej odpowiedzi do klienta)
+        // Wyślij powiadomienia (poza transakcją, po pomyślnej odpowiedzi do klienta)
         console.log('Rozpoczynanie wysyłki powiadomień...');
         const tokensResult = await pool.query('SELECT fcm_token FROM users WHERE id = ANY($1::bigint[]) AND fcm_token IS NOT NULL', [assignedUserIds]);
         const tokens = tokensResult.rows.map(row => row.fcm_token);
-
         if (tokens.length > 0) {
             const message = {
                 notification: {
@@ -213,7 +200,6 @@ app.post('/api/tasks', async (req, res) => {
         } else {
             console.log("Brak tokenów FCM dla przypisanych użytkowników. Pomijanie wysyłki powiadomień.");
         }
-
     } catch (error) {
         await client.query('ROLLBACK'); // Wycofanie transakcji w razie błędu
         console.error('Błąd [POST /api/tasks]:', error);
@@ -258,11 +244,26 @@ app.put('/api/tasks/:id/deadline', async (req, res) => {
     }
 });
 
+// [NOWY] Endpoint do usuwania zadań
+app.delete('/api/tasks/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        // Dzięki "ON DELETE CASCADE" w bazie danych, usunięcie zadania
+        // automatycznie usunie powiązane z nim przypisania z tabeli task_assignments.
+        const result = await pool.query('DELETE FROM tasks WHERE id = $1', [id]);
+        if (result.rowCount === 0) {
+            return res.status(404).json({ message: 'Zadanie nie znalezione.' });
+        }
+        res.status(204).send();
+    } catch (error) {
+        console.error(`Błąd [DELETE /api/tasks/${req.params.id}]:`, error);
+        res.status(500).json({ message: 'Błąd serwera.' });
+    }
+});
 
 // =================================================================
 // --- ENDPOINTY DLA STATYSTYK (BEZ ZMIAN) ---
 // =================================================================
-// Twoja istniejąca logika dla statystyk pozostaje nietknięta i w pełni funkcjonalna.
 
 // [BEZ ZMIAN] Pobierz wszystkie statystyki
 app.get('/api/statystyki', async (req, res) => {
@@ -321,7 +322,6 @@ app.post('/api/statystyki', async (req, res) => {
     res.status(500).json({ message: 'Błąd serwera.' });
   }
 });
-
 
 // =================================================================
 // --- URUCHOMIENIE SERWERA ---
