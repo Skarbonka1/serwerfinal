@@ -134,6 +134,7 @@ app.get('/api/tasks/calendar', async (req, res) => {
     }
 
     try {
+        // ### ZAPYTANIE Z POPRAWIONĄ LOGIKĄ WIDOCZNOŚCI ###
         const sql = `
             SELECT 
                 t.*,
@@ -166,7 +167,7 @@ app.get('/api/tasks/calendar', async (req, res) => {
 });
 
 
-// [ZMODYFIKOWANY] Ten endpoint teraz ZAWSZE tworzy zadanie jako SZKIC (draft)
+// [BEZ ZMIAN] Tworzy zadanie jako szkic
 app.post('/api/tasks', async (req, res) => {
     const { title, content_state, creator_id, leader_id, deadline, importance, assignedUserIds } = req.body;
     
@@ -174,13 +175,12 @@ app.post('/api/tasks', async (req, res) => {
     try {
         await client.query('BEGIN');
         
-        // Zachowujemy Twoją metodę generowania ID. Dodajemy status 'draft'.
         const taskSql = `
             INSERT INTO tasks (id, title, content_state, creator_id, leader_id, deadline, importance, status, publication_date) 
             VALUES (COALESCE((SELECT MAX(id) FROM tasks), 0) + 1, $1, $2, $3, $4, $5, $6, 'draft', NOW()) RETURNING *;
         `;
         const params = [
-            title || 'Nowy szkic', // Domyślny tytuł, jeśli jest pusty
+            title || 'Nowy szkic',
             content_state,
             parseInt(creator_id, 10),
             leader_id ? parseInt(leader_id, 10) : null,
@@ -191,7 +191,6 @@ app.post('/api/tasks', async (req, res) => {
         const taskResult = await client.query(taskSql, params);
         const newTask = taskResult.rows[0];
 
-        // Przypisujemy użytkowników nawet do szkicu
         if (assignedUserIds && assignedUserIds.length > 0) {
             const assignmentPromises = assignedUserIds.map(userId => {
                 const assignmentSql = 'INSERT INTO task_assignments (task_id, user_id) VALUES ($1, $2)';
@@ -201,7 +200,7 @@ app.post('/api/tasks', async (req, res) => {
         }
         
         await client.query('COMMIT');
-        res.status(201).json(newTask); // Zwracamy nowo utworzony szkic z jego ID
+        res.status(201).json(newTask);
 
     } catch (error) {
         await client.query('ROLLBACK');
@@ -212,7 +211,7 @@ app.post('/api/tasks', async (req, res) => {
     }
 });
 
-// [NOWY] Endpoint do aktualizacji zadania (zarówno szkicu jak i opublikowanego)
+// [BEZ ZMIAN] Aktualizuje zadanie
 app.put('/api/tasks/:id', async (req, res) => {
     const { id } = req.params;
     const { title, content_state, leader_id, deadline, importance, assignedUserIds } = req.body;
@@ -221,7 +220,6 @@ app.put('/api/tasks/:id', async (req, res) => {
     try {
         await client.query('BEGIN');
 
-        // 1. Zaktualizuj główne dane zadania
         const taskSql = `
             UPDATE tasks SET title = $1, content_state = $2, leader_id = $3, deadline = $4, importance = $5
             WHERE id = $6 RETURNING *;
@@ -239,7 +237,6 @@ app.put('/api/tasks/:id', async (req, res) => {
             return res.status(404).json({ message: 'Zadanie nie znalezione.' });
         }
 
-        // 2. Zaktualizuj przypisania (usuń stare, dodaj nowe)
         await client.query('DELETE FROM task_assignments WHERE task_id = $1', [id]);
         if (assignedUserIds && assignedUserIds.length > 0) {
             const assignmentPromises = assignedUserIds.map(userId => {
@@ -261,28 +258,25 @@ app.put('/api/tasks/:id', async (req, res) => {
     }
 });
 
-// [NOWY] Endpoint do publikacji zadania i wysłania powiadomień
+// [BEZ ZMIAN] Publikuje zadanie
 app.post('/api/tasks/:id/publish', async (req, res) => {
     const { id } = req.params;
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
 
-        // 1. Zmień status zadania na 'w toku'
         const taskResult = await client.query("UPDATE tasks SET status = 'w toku', publication_date = NOW() WHERE id = $1 RETURNING *", [id]);
         if (taskResult.rowCount === 0) {
             return res.status(404).json({ message: 'Zadanie do publikacji nie znalezione.' });
         }
         const task = taskResult.rows[0];
 
-        // 2. Pobierz przypisanych użytkowników
         const assignmentsResult = await client.query('SELECT user_id FROM task_assignments WHERE task_id = $1', [id]);
         const assignedUserIds = assignmentsResult.rows.map(r => r.user_id);
 
         await client.query('COMMIT');
         res.status(200).json({ message: 'Zadanie opublikowane.' });
 
-        // 3. Wyślij powiadomienia (poza transakcją)
         if (assignedUserIds.length > 0) {
             const tokensResult = await pool.query('SELECT fcm_token FROM users WHERE id = ANY($1::bigint[]) AND fcm_token IS NOT NULL', [assignedUserIds]);
             const tokens = tokensResult.rows.map(row => row.fcm_token);
