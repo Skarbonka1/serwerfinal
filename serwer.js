@@ -50,8 +50,7 @@ try {
 // =================================================================
 // --- ENDPOINTY API DLA UŻYTKOWNIKÓW (USERS) ---
 // =================================================================
-
-// [BEZ ZMIAN] Bezpieczny endpoint do logowania
+// Ta sekcja pozostaje bez zmian
 app.post('/api/login', async (req, res) => {
     try {
         const { username, password } = req.body;
@@ -68,7 +67,6 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-// [BEZ ZMIAN] Pobierz wszystkich użytkowników
 app.get('/api/users', async (req, res) => {
   try {
     const result = await pool.query('SELECT id, username, role, subrole FROM users ORDER BY id ASC');
@@ -79,7 +77,6 @@ app.get('/api/users', async (req, res) => {
   }
 });
 
-// [BEZ ZMIAN] Endpoint do zapisywania tokenu FCM użytkownika
 app.post('/api/register-token', async (req, res) => {
     const { userId, token } = req.body;
     if (!userId || !token) {
