@@ -173,8 +173,8 @@ app.post('/api/tasks', async (req, res) => {
             content_state,
             parseInt(creator_id, 10),
             leader_id ? parseInt(leader_id, 10) : null,
-            deadline,
-            importance
+            deadline && deadline.trim() !== '' ? deadline : null, // Konwertuj pusty string na null
+            importance && importance !== '' ? importance : null // Konwertuj pusty string na null
         ];
         
         const taskResult = await client.query(taskSql, params);
@@ -219,8 +219,8 @@ app.put('/api/tasks/:id', async (req, res) => {
             title,
             content_state,
             leader_id ? parseInt(leader_id, 10) : null,
-            deadline,
-            importance,
+            deadline && deadline.trim() !== '' ? deadline : null, // Konwertuj pusty string na null
+            importance && importance !== '' ? importance : null, // Konwertuj pusty string na null
             id
         ];
         const taskResult = await client.query(taskSql, params);
@@ -303,7 +303,8 @@ app.put('/api/tasks/:id/deadline', async (req, res) => {
         const { id } = req.params;
         const { deadline } = req.body;
         const sql = 'UPDATE tasks SET deadline = $1 WHERE id = $2 RETURNING *';
-        const result = await pool.query(sql, [deadline, id]);
+        const cleanDeadline = deadline && deadline.trim() !== '' ? deadline : null; // Konwertuj pusty string na null
+        const result = await pool.query(sql, [cleanDeadline, id]);
         if (result.rowCount === 0) {
             return res.status(404).json({ message: 'Zadanie nie znalezione.' });
         }
