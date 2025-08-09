@@ -126,8 +126,13 @@ app.delete('/api/users/:id', async (req, res) => {
 // --- ZAKTUALIZOWANE ENDPOINTY API DLA ZADAŃ (TASKS) ---
 // =================================================================
 
-// [BEZ ZMIAN] Pobierz zadania dla widoku kalendarza
+// [ZMODYFIKOWANY] Pobiera zadania widoczne TYLKO dla konkretnego użytkownika
 app.get('/api/tasks/calendar', async (req, res) => {
+    const { userId } = req.query;
+    if (!userId) {
+        return res.status(400).json({ message: 'Brak ID użytkownika.' });
+    }
+
     try {
         const sql = `
             SELECT 
@@ -144,9 +149,15 @@ app.get('/api/tasks/calendar', async (req, res) => {
                 JOIN users u ON u.id = ta.user_id
                 GROUP BY ta.task_id
             ) asgn ON asgn.task_id = t.id
+            WHERE 
+                -- Pokaż zadanie, jeśli jest opublikowane I użytkownik jest do niego przypisany
+                (t.status = 'w toku' AND t.id IN (SELECT task_id FROM task_assignments WHERE user_id = $1))
+                OR 
+                -- LUB pokaż zadanie, jeśli jest szkicem stworzonym przez tego użytkownika
+                (t.status = 'draft' AND t.creator_id = $1)
             ORDER BY t.publication_date DESC;
         `;
-        const result = await pool.query(sql);
+        const result = await pool.query(sql, [userId]);
         res.json(result.rows);
     } catch (error) {
         console.error('Błąd [GET /api/tasks/calendar]:', error);
@@ -173,8 +184,8 @@ app.post('/api/tasks', async (req, res) => {
             content_state,
             parseInt(creator_id, 10),
             leader_id ? parseInt(leader_id, 10) : null,
-            deadline && deadline.trim() !== '' ? deadline : null, // Konwertuj pusty string na null
-            importance && importance !== '' ? importance : null // Konwertuj pusty string na null
+            deadline || null,
+            importance
         ];
         
         const taskResult = await client.query(taskSql, params);
@@ -219,8 +230,8 @@ app.put('/api/tasks/:id', async (req, res) => {
             title,
             content_state,
             leader_id ? parseInt(leader_id, 10) : null,
-            deadline && deadline.trim() !== '' ? deadline : null, // Konwertuj pusty string na null
-            importance && importance !== '' ? importance : null, // Konwertuj pusty string na null
+            deadline || null,
+            importance,
             id
         ];
         const taskResult = await client.query(taskSql, params);
@@ -258,7 +269,7 @@ app.post('/api/tasks/:id/publish', async (req, res) => {
         await client.query('BEGIN');
 
         // 1. Zmień status zadania na 'w toku'
-        const taskResult = await client.query("UPDATE tasks SET status = 'w toku' WHERE id = $1 RETURNING *", [id]);
+        const taskResult = await client.query("UPDATE tasks SET status = 'w toku', publication_date = NOW() WHERE id = $1 RETURNING *", [id]);
         if (taskResult.rowCount === 0) {
             return res.status(404).json({ message: 'Zadanie do publikacji nie znalezione.' });
         }
@@ -297,31 +308,28 @@ app.post('/api/tasks/:id/publish', async (req, res) => {
 });
 
 
-// [BEZ ZMIAN] Pozostałe endpointy
+// [BEZ ZMIAN] Endpoint do usuwania zadań
+app.delete('/api/tasks/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const result = await pool.query('DELETE FROM tasks WHERE id = $1', [id]);
+        if (result.rowCount === 0) return res.status(404).json({ message: 'Zadanie nie znalezione.' });
+        res.status(204).send();
+    } catch (error) {
+        console.error(`Błąd [DELETE /api/tasks/${id}]:`, error);
+        res.status(500).json({ message: 'Błąd serwera.' });
+    }
+});
+
+// [BEZ ZMIAN] Endpoint do zmiany terminu zadania
 app.put('/api/tasks/:id/deadline', async (req, res) => {
     try {
         const { id } = req.params;
         const { deadline } = req.body;
         const sql = 'UPDATE tasks SET deadline = $1 WHERE id = $2 RETURNING *';
-        const cleanDeadline = deadline && deadline.trim() !== '' ? deadline : null; // Konwertuj pusty string na null
-        const result = await pool.query(sql, [cleanDeadline, id]);
-        if (result.rowCount === 0) {
-            return res.status(404).json({ message: 'Zadanie nie znalezione.' });
-        }
+        const result = await pool.query(sql, [deadline || null, id]);
+        if (result.rowCount === 0) return res.status(404).json({ message: 'Zadanie nie znalezione.' });
         res.json(result.rows[0]);
-    } catch (error) {
-        res.status(500).json({ message: 'Błąd serwera.' });
-    }
-});
-
-app.delete('/api/tasks/:id', async (req, res) => {
-    try {
-        const { id } = req.params;
-        const result = await pool.query('DELETE FROM tasks WHERE id = $1', [id]);
-        if (result.rowCount === 0) {
-            return res.status(404).json({ message: 'Użytkownik nie znaleziony.' });
-        }
-        res.status(204).send();
     } catch (error) {
         res.status(500).json({ message: 'Błąd serwera.' });
     }
@@ -352,14 +360,10 @@ app.put('/api/statystyki/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const { ilosc } = req.body;
-        if (ilosc === undefined) {
-            return res.status(400).json({ message: 'Brakująca wartość "ilosc" w zapytaniu.' });
-        }
+        if (ilosc === undefined) return res.status(400).json({ message: 'Brakująca wartość "ilosc" w zapytaniu.' });
         const sql = 'UPDATE statystyka_sprzedazy SET ilosc = $1 WHERE id = $2 RETURNING *';
         const result = await pool.query(sql, [ilosc, id]);
-        if (result.rowCount === 0) {
-            return res.status(404).json({ message: 'Rekord statystyki nie został znaleziony.' });
-        }
+        if (result.rowCount === 0) return res.status(404).json({ message: 'Rekord statystyki nie został znaleziony.' });
         res.json(result.rows[0]);
     } catch (error) {
         res.status(500).json({ message: 'Błąd serwera.' });
@@ -369,23 +373,17 @@ app.put('/api/statystyki/:id', async (req, res) => {
 app.post('/api/statystyki', async (req, res) => {
   try {
     const { rok, miesiac, ilosc, rodzaj_produktu } = req.body;
-    if (!rodzaj_produktu) {
-        return res.status(400).json({ message: 'Brakująca wartość "rodzaj_produktu" w zapytaniu.' });
-    }
+    if (!rodzaj_produktu) return res.status(400).json({ message: 'Brakująca wartość "rodzaj_produktu" w zapytaniu.' });
     const sql = 'INSERT INTO statystyka_sprzedazy (rok, miesiac, ilosc, rodzaj_produktu) VALUES ($1, $2, $3, $4) RETURNING *';
     const result = await pool.query(sql, [rok, miesiac, ilosc, rodzaj_produktu]);
     res.status(201).json(result.rows[0]);
   } catch (error) {
-    if (error.code === '23505') {
-        return res.status(409).json({ message: 'Wpis dla tego produktu, roku i miesiąca już istnieje.' });
-    }
+    if (error.code === '23505') return res.status(409).json({ message: 'Wpis dla tego produktu, roku i miesiąca już istnieje.' });
     res.status(500).json({ message: 'Błąd serwera.' });
   }
 });
 
-// =================================================================
-// --- URUCHOMIENIE SERWERA ---
-// =================================================================
+// Uruchomienie serwera
 app.listen(PORT, () => {
   console.log(`Serwer nasłuchuje na porcie ${PORT}`);
 });
