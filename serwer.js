@@ -148,8 +148,8 @@ app.get('/api/tasks/calendar', async (req, res) => {
                 GROUP BY ta.task_id
             ) asgn ON asgn.task_id = t.id
             WHERE 
-                -- Pokaż zadanie, jeśli jest opublikowane I użytkownik jest do niego przypisany
-                (t.status = 'w toku' AND t.id IN (SELECT task_id FROM task_assignments WHERE user_id = $1))
+                -- Pokaż zadanie, jeśli jest opublikowane I (jesteś jego twórcą LUB jesteś do niego przypisany)
+                (t.status = 'w toku' AND (t.creator_id = $1 OR t.id IN (SELECT task_id FROM task_assignments WHERE user_id = $1)))
                 OR 
                 -- LUB pokaż zadanie, jeśli jest szkicem stworzonym przez tego użytkownika
                 (t.status = 'draft' AND t.creator_id = $1)
