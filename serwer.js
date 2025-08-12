@@ -104,6 +104,41 @@ app.post('/api/users', async (req, res) => {
   }
 });
 
+// NOWY Endpoint do edycji użytkownika
+app.put('/api/users/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { username, role, subrole } = req.body;
+
+        // Prosta walidacja, czy mamy jakiekolwiek dane do aktualizacji
+        if (!username || !role) {
+            return res.status(400).json({ message: 'Nazwa użytkownika i rola są wymagane.' });
+        }
+
+        const sql = `
+            UPDATE users 
+            SET username = $1, role = $2, subrole = $3 
+            WHERE id = $4 
+            RETURNING id, username, role, subrole;
+        `;
+        
+        const result = await pool.query(sql, [username, role, subrole, id]);
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({ message: 'Użytkownik nie znaleziony.' });
+        }
+
+        res.json(result.rows[0]);
+    } catch (error) {
+        console.error(`Błąd [PUT /api/users/${req.params.id}]:`, error);
+        // Obsługa błędu unikalności nazwy użytkownika
+        if (error.code === '23505') { 
+            return res.status(409).json({ message: 'Użytkownik o tej nazwie już istnieje.' });
+        }
+        res.status(500).json({ message: 'Błąd serwera.' });
+    }
+});
+
 // [BEZ ZMIAN] Usuń użytkownika
 app.delete('/api/users/:id', async (req, res) => {
     try {
