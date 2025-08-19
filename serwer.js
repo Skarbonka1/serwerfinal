@@ -365,46 +365,81 @@ app.put('/api/tasks/:id/deadline', async (req, res) => {
 // --- ENDPOINTY DLA STATYSTYK (BEZ ZMIAN) ---
 // =================================================================
 
+// [ZMODYFIKOWANY] Pobierz wszystkie statystyki, sortowanie uwzględnia nowe pola
 app.get('/api/statystyki', async (req, res) => {
   try {
-    const { rodzaj_produktu } = req.query;
-    let sql = 'SELECT * FROM statystyka_sprzedazy';
-    const params = [];
-    if (rodzaj_produktu) {
-      sql += ' WHERE rodzaj_produktu = $1';
-      params.push(rodzaj_produktu);
-    }
-    sql += ' ORDER BY rok, rodzaj_produktu, miesiac ASC';
-    const result = await pool.query(sql, params);
+    const sql = 'SELECT * FROM statystyka_sprzedazy ORDER BY rok, miesiac, tydzien, dzien, rodzaj_produktu ASC';
+    const result = await pool.query(sql);
     res.json(result.rows);
   } catch (error) {
+    console.error('Błąd [GET /api/statystyki]:', error);
     res.status(500).json({ message: 'Błąd serwera.' });
   }
 });
 
+// [ZMODYFIKOWANY] Zaktualizuj wpis w statystyce (dodano tydzien i dzien)
 app.put('/api/statystyki/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const { ilosc } = req.body;
-        if (ilosc === undefined) return res.status(400).json({ message: 'Brakująca wartość "ilosc" w zapytaniu.' });
-        const sql = 'UPDATE statystyka_sprzedazy SET ilosc = $1 WHERE id = $2 RETURNING *';
-        const result = await pool.query(sql, [ilosc, id]);
-        if (result.rowCount === 0) return res.status(404).json({ message: 'Rekord statystyki nie został znaleziony.' });
+        const { ilosc, tydzien, dzien } = req.body; // Pobieramy nowe pola
+        
+        // Budujemy zapytanie dynamicznie, aby aktualizować tylko te pola, które zostały przesłane
+        const fieldsToUpdate = [];
+        const values = [];
+        let queryIndex = 1;
+
+        if (ilosc !== undefined) {
+            fieldsToUpdate.push(`ilosc = $${queryIndex++}`);
+            values.push(ilosc);
+        }
+        if (tydzien !== undefined) {
+            fieldsToUpdate.push(`tydzien = $${queryIndex++}`);
+            values.push(tydzien || null); // Zamień pusty string na NULL
+        }
+        if (dzien !== undefined) {
+            fieldsToUpdate.push(`dzien = $${queryIndex++}`);
+            values.push(dzien || null); // Zamień pusty string na NULL
+        }
+
+        if (fieldsToUpdate.length === 0) {
+            return res.status(400).json({ message: 'Brak danych do aktualizacji.' });
+        }
+
+        values.push(id); // Dodaj ID na końcu jako ostatni parametr
+        const sql = `UPDATE statystyka_sprzedazy SET ${fieldsToUpdate.join(', ')} WHERE id = $${queryIndex} RETURNING *`;
+        
+        const result = await pool.query(sql, values);
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({ message: 'Rekord statystyki nie został znaleziony.' });
+        }
         res.json(result.rows[0]);
     } catch (error) {
+        console.error(`Błąd [PUT /api/statystyki/${req.params.id}]:`, error);
         res.status(500).json({ message: 'Błąd serwera.' });
     }
 });
 
+// [ZMODYFIKOWANY] Stwórz nowy wpis w statystykach (dodano tydzien i dzien)
 app.post('/api/statystyki', async (req, res) => {
   try {
-    const { rok, miesiac, ilosc, rodzaj_produktu } = req.body;
-    if (!rodzaj_produktu) return res.status(400).json({ message: 'Brakująca wartość "rodzaj_produktu" w zapytaniu.' });
-    const sql = 'INSERT INTO statystyka_sprzedazy (rok, miesiac, ilosc, rodzaj_produktu) VALUES ($1, $2, $3, $4) RETURNING *';
-    const result = await pool.query(sql, [rok, miesiac, ilosc, rodzaj_produktu]);
+    const { rok, miesiac, tydzien, dzien, ilosc, rodzaj_produktu } = req.body;
+    if (!rodzaj_produktu) {
+        return res.status(400).json({ message: 'Brakująca wartość "rodzaj_produktu" w zapytaniu.' });
+    }
+    const sql = `
+        INSERT INTO statystyka_sprzedazy (rok, miesiac, tydzien, dzien, ilosc, rodzaj_produktu) 
+        VALUES ($1, $2, $3, $4, $5, $6) RETURNING *
+    `;
+    // Upewniamy się, że puste wartości są zamieniane na NULL
+    const params = [rok, miesiac, tydzien || null, dzien || null, ilosc, rodzaj_produktu];
+    const result = await pool.query(sql, params);
     res.status(201).json(result.rows[0]);
   } catch (error) {
-    if (error.code === '23505') return res.status(409).json({ message: 'Wpis dla tego produktu, roku i miesiąca już istnieje.' });
+    console.error('Błąd [POST /api/statystyki]:', error);
+    if (error.code === '23505') {
+        return res.status(409).json({ message: 'Wpis dla tego produktu, roku i miesiąca już istnieje.' });
+    }
     res.status(500).json({ message: 'Błąd serwera.' });
   }
 });
