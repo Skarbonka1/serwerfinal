@@ -290,7 +290,7 @@ app.put('/api/tasks/:id', async (req, res) => {
     }
 });
 
-// [BEZ ZMIAN] Publikuje zadanie
+// [ZAKTUALIZOWANY] Publikuje zadanie i wysyła powiadomienia
 app.post('/api/tasks/:id/publish', async (req, res) => {
     const { id } = req.params;
     const client = await pool.connect();
@@ -309,6 +309,7 @@ app.post('/api/tasks/:id/publish', async (req, res) => {
         await client.query('COMMIT');
         res.status(200).json({ message: 'Zadanie opublikowane.' });
 
+        // LOGIKA WYSYŁANIA POWIADOMIEŃ
         if (assignedUserIds.length > 0) {
             const tokensResult = await pool.query('SELECT fcm_token FROM users WHERE id = ANY($1::bigint[]) AND fcm_token IS NOT NULL', [assignedUserIds]);
             const tokens = tokensResult.rows.map(row => row.fcm_token);
@@ -321,7 +322,7 @@ app.post('/api/tasks/:id/publish', async (req, res) => {
                     tokens: tokens,
                 };
                 await admin.messaging().sendEachForMulticast(message);
-                console.log("Powiadomienia wysłane.");
+                console.log(`✅ Powiadomienia wysłane do ${tokens.length} urządzeń.`);
             }
         }
     } catch (error) {
