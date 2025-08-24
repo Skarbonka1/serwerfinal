@@ -340,6 +340,34 @@ app.put('/api/tasks/:id', async (req, res) => {
     }
 });
 
+app.get('/api/tasks/all', async (req, res) => {
+    try {
+        // To zapytanie jest bardzo podobne do tego z /calendar, ale bez warunku WHERE filtrującego po userId
+        const sql = `
+            SELECT 
+                t.*,
+                COALESCE(creator.username, 'Nieznany') as "creatorName",
+                COALESCE(leader.username, 'Brak') as "leaderName",
+                COALESCE(asgn.users, '[]'::json) as "assignedUsers"
+            FROM tasks t
+            LEFT JOIN users creator ON t.creator_id = creator.id
+            LEFT JOIN users leader ON t.leader_id = leader.id
+            LEFT JOIN (
+                SELECT ta.task_id, json_agg(u.username) as users
+                FROM task_assignments ta
+                JOIN users u ON u.id = ta.user_id
+                GROUP BY ta.task_id
+            ) asgn ON asgn.task_id = t.id
+            ORDER BY t.publication_date DESC;
+        `;
+        const result = await pool.query(sql);
+        res.json(result.rows);
+    } catch (error) {
+        console.error('Błąd [GET /api/tasks/all]:', error);
+        res.status(500).json({ message: 'Błąd serwera.' });
+    }
+});
+
 // [ZAKTUALIZOWANY] Publikuje zadanie i wysyła powiadomienia
 app.post('/api/tasks/:id/publish', async (req, res) => {
     const { id } = req.params;
