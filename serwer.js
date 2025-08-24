@@ -198,6 +198,56 @@ app.get('/api/tasks/calendar', async (req, res) => {
     }
 });
 
+// NOWY Endpoint do pobierania zadań na dzisiaj i zaległych dla użytkownika
+app.get('/api/tasks/today', async (req, res) => {
+    const { userId } = req.query;
+    if (!userId) {
+        return res.status(400).json({ message: 'Brak ID użytkownika.' });
+    }
+    try {
+        const sql = `
+            SELECT t.*
+            FROM tasks t
+            JOIN task_assignments ta ON t.id = ta.task_id
+            WHERE 
+                ta.user_id = $1 
+                AND (
+                    -- Warunek 1: Zadania z terminem na dzisiaj (niezależnie od statusu)
+                    t.deadline::date = CURRENT_DATE 
+                    OR 
+                    -- Warunek 2: Zadania z przeszłości, które nie są jeszcze zakończone
+                    (t.deadline::date < CURRENT_DATE AND t.status != 'zakończone')
+                )
+            ORDER BY t.deadline ASC;
+        `;
+        const result = await pool.query(sql, [userId]);
+        res.json(result.rows);
+    } catch (error) {
+        console.error('Błąd [GET /api/tasks/today]:', error);
+        res.status(500).json({ message: 'Błąd serwera.' });
+    }
+});
+
+// NOWY Endpoint do szybkiej zmiany statusu zadania
+app.patch('/api/tasks/:id/status', async (req, res) => {
+    const { id } = req.params;
+    const { status } = req.body;
+    if (!status) {
+        return res.status(400).json({ message: 'Brak nowego statusu.' });
+    }
+    try {
+        const sql = 'UPDATE tasks SET status = $1 WHERE id = $2 RETURNING *';
+        const result = await pool.query(sql, [status, id]);
+        if (result.rowCount === 0) {
+            return res.status(404).json({ message: 'Zadanie nie znalezione.' });
+        }
+        res.json(result.rows[0]);
+    } catch (error) {
+        console.error(`Błąd [PATCH /api/tasks/${id}/status]:`, error);
+        res.status(500).json({ message: 'Błąd serwera podczas aktualizacji statusu.' });
+    }
+});
+
 
 // [BEZ ZMIAN] Tworzy zadanie jako szkic
 app.post('/api/tasks', async (req, res) => {
