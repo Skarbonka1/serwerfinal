@@ -340,6 +340,30 @@ app.put('/api/tasks/:id', async (req, res) => {
     }
 });
 
+// NOWY Endpoint do pobierania aktywnych zadań dla użytkownika
+app.get('/api/tasks/active', async (req, res) => {
+    const { userId } = req.query;
+    if (!userId) {
+        return res.status(400).json({ message: 'Brak ID użytkownika.' });
+    }
+    try {
+        const sql = `
+            SELECT t.*
+            FROM tasks t
+            JOIN task_assignments ta ON t.id = ta.task_id
+            WHERE 
+                ta.user_id = $1 
+                AND t.status != 'zakończone'
+            ORDER BY t.publication_date DESC;
+        `;
+        const result = await pool.query(sql, [userId]);
+        res.json(result.rows);
+    } catch (error) {
+        console.error('Błąd [GET /api/tasks/active]:', error);
+        res.status(500).json({ message: 'Błąd serwera.' });
+    }
+});
+
 app.get('/api/tasks/all', async (req, res) => {
     try {
         // To zapytanie jest bardzo podobne do tego z /calendar, ale bez warunku WHERE filtrującego po userId
