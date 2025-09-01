@@ -154,6 +154,83 @@ app.delete('/api/users/:id', async (req, res) => {
     }
 });
 
+
+// =================================================================
+// --- NOWE ENDPOINTY API DLA ZADAŃ CYKLICZNYCH (RECURRING_TASKS) ---
+// =================================================================
+
+// [NOWY] Pobiera wszystkie szablony zadań cyklicznych
+app.get('/api/recurring-tasks', async (req, res) => {
+    try {
+        const result = await pool.query('SELECT * FROM recurring_tasks ORDER BY id ASC');
+        res.json(result.rows);
+    } catch (error) {
+        console.error('Błąd [GET /api/recurring-tasks]:', error);
+        res.status(500).json({ message: 'Błąd serwera.' });
+    }
+});
+
+// [NOWY] Tworzy nowy szablon zadania cyklicznego
+app.post('/api/recurring-tasks', async (req, res) => {
+    try {
+        const { title, content_state, importance, creator_id, leader_id, start_date, end_date, recurrence_type } = req.body;
+        
+        const sql = `
+            INSERT INTO recurring_tasks (title, content_state, importance, creator_id, leader_id, start_date, end_date, recurrence_type) 
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8) 
+            RETURNING *;
+        `;
+        const params = [title, content_state, importance, creator_id, leader_id, start_date, end_date, recurrence_type];
+        
+        const result = await pool.query(sql, params);
+        res.status(201).json(result.rows[0]);
+    } catch (error) {
+        console.error('Błąd [POST /api/recurring-tasks]:', error);
+        res.status(500).json({ message: 'Błąd serwera podczas tworzenia zadania cyklicznego.' });
+    }
+});
+
+// [NOWY] Aktualizuje szablon zadania cyklicznego
+app.put('/api/recurring-tasks/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { title, content_state, importance, leader_id, start_date, end_date, recurrence_type } = req.body;
+
+        const sql = `
+            UPDATE recurring_tasks 
+            SET title = $1, content_state = $2, importance = $3, leader_id = $4, start_date = $5, end_date = $6, recurrence_type = $7
+            WHERE id = $8 
+            RETURNING *;
+        `;
+        const params = [title, content_state, importance, leader_id, start_date, end_date, recurrence_type, id];
+        
+        const result = await pool.query(sql, params);
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({ message: 'Szablon zadania cyklicznego nie znaleziony.' });
+        }
+        res.json(result.rows[0]);
+    } catch (error) {
+        console.error(`Błąd [PUT /api/recurring-tasks/${id}]:`, error);
+        res.status(500).json({ message: 'Błąd serwera podczas aktualizacji zadania cyklicznego.' });
+    }
+});
+
+// [NOWY] Usuwa szablon zadania cyklicznego (i wszystkie powiązane zadania dzięki CASCADE)
+app.delete('/api/recurring-tasks/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const result = await pool.query('DELETE FROM recurring_tasks WHERE id = $1', [id]);
+        if (result.rowCount === 0) {
+            return res.status(404).json({ message: 'Szablon zadania cyklicznego nie znaleziony.' });
+        }
+        res.status(204).send();
+    } catch (error) {
+        console.error(`Błąd [DELETE /api/recurring-tasks/${id}]:`, error);
+        res.status(500).json({ message: 'Błąd serwera.' });
+    }
+});
+
 // =================================================================
 // --- ZAKTUALIZOWANE ENDPOINTY API DLA ZADAŃ (TASKS) ---
 // =================================================================
@@ -249,17 +326,19 @@ app.patch('/api/tasks/:id/status', async (req, res) => {
 });
 
 
-// [BEZ ZMIAN] Tworzy zadanie jako szkic
+// [ZAKTUALIZOWANY] Tworzy zadanie jako szkic, z opcjonalnym powiązaniem do zadania cyklicznego
 app.post('/api/tasks', async (req, res) => {
-    const { title, content_state, creator_id, leader_id, deadline, importance, assignedUserIds } = req.body;
+    // Dodajemy recurring_task_id do destrukturyzacji
+    const { title, content_state, creator_id, leader_id, deadline, importance, assignedUserIds, recurring_task_id } = req.body;
     
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
         
+        // Dodajemy recurring_task_id do zapytania SQL i parametrów
         const taskSql = `
-            INSERT INTO tasks (id, title, content_state, creator_id, leader_id, deadline, importance, status, publication_date) 
-            VALUES (COALESCE((SELECT MAX(id) FROM tasks), 0) + 1, $1, $2, $3, $4, $5, $6, 'draft', NOW()) RETURNING *;
+            INSERT INTO tasks (id, title, content_state, creator_id, leader_id, deadline, importance, status, publication_date, recurring_task_id) 
+            VALUES (COALESCE((SELECT MAX(id) FROM tasks), 0) + 1, $1, $2, $3, $4, $5, $6, 'draft', NOW(), $7) RETURNING *;
         `;
         const params = [
             title || 'Nowy szkic',
@@ -267,7 +346,8 @@ app.post('/api/tasks', async (req, res) => {
             parseInt(creator_id, 10),
             leader_id ? parseInt(leader_id, 10) : null,
             deadline || null,
-            importance
+            importance,
+            recurring_task_id ? parseInt(recurring_task_id, 10) : null // Dodajemy recurring_task_id
         ];
         
         const taskResult = await client.query(taskSql, params);
@@ -293,18 +373,20 @@ app.post('/api/tasks', async (req, res) => {
     }
 });
 
-// [BEZ ZMIAN] Aktualizuje zadanie
+// [ZAKTUALIZOWANY] Aktualizuje zadanie, z opcjonalnym powiązaniem do zadania cyklicznego
 app.put('/api/tasks/:id', async (req, res) => {
     const { id } = req.params;
-    const { title, content_state, leader_id, deadline, importance, assignedUserIds } = req.body;
+    // Dodajemy recurring_task_id do destrukturyzacji
+    const { title, content_state, leader_id, deadline, importance, assignedUserIds, recurring_task_id } = req.body;
     
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
 
+        // Dodajemy recurring_task_id do zapytania SQL i parametrów
         const taskSql = `
-            UPDATE tasks SET title = $1, content_state = $2, leader_id = $3, deadline = $4, importance = $5
-            WHERE id = $6 RETURNING *;
+            UPDATE tasks SET title = $1, content_state = $2, leader_id = $3, deadline = $4, importance = $5, recurring_task_id = $6
+            WHERE id = $7 RETURNING *;
         `;
         const params = [
             title,
@@ -312,10 +394,12 @@ app.put('/api/tasks/:id', async (req, res) => {
             leader_id ? parseInt(leader_id, 10) : null,
             deadline || null,
             importance,
+            recurring_task_id ? parseInt(recurring_task_id, 10) : null, // Dodajemy recurring_task_id
             id
         ];
         const taskResult = await client.query(taskSql, params);
         if (taskResult.rowCount === 0) {
+            await client.query('ROLLBACK');
             return res.status(404).json({ message: 'Zadanie nie znalezione.' });
         }
 
