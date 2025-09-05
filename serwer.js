@@ -83,11 +83,39 @@ app.post('/api/register-token', async (req, res) => {
         return res.status(400).json({ message: 'Brak userId lub tokenu.'});
     }
     try {
-        await pool.query('UPDATE users SET fcm_token = $1 WHERE id = $2', [token, userId]);
+        // Dodajemy token do tablicy, tylko jeśli jeszcze go tam nie ma
+        await pool.query(`
+            UPDATE users 
+            SET fcm_token = array_append(
+                COALESCE(fcm_token, '{}'), 
+                $1
+            ) 
+            WHERE id = $2 
+            AND NOT ($1 = ANY(COALESCE(fcm_token, '{}')))
+        `, [token, userId]);
         res.status(200).json({ message: 'Token zapisany pomyślnie.' });
     } catch (error) {
         console.error('Błąd [POST /api/register-token]:', error);
         res.status(500).json({ message: 'Błąd serwera podczas zapisywania tokenu.' });
+    }
+});
+
+// [NOWY] Endpoint do usuwania tokenu (np. przy wylogowaniu)
+app.delete('/api/unregister-token', async (req, res) => {
+    const { userId, token } = req.body;
+    if (!userId || !token) {
+        return res.status(400).json({ message: 'Brak userId lub tokenu.' });
+    }
+    try {
+        await pool.query(`
+            UPDATE users 
+            SET fcm_token = array_remove(COALESCE(fcm_token, '{}'), $1) 
+            WHERE id = $2
+        `, [token, userId]);
+        res.status(200).json({ message: 'Token usunięty pomyślnie.' });
+    } catch (error) {
+        console.error('Błąd [DELETE /api/unregister-token]:', error);
+        res.status(500).json({ message: 'Błąd serwera podczas usuwania tokenu.' });
     }
 });
 
@@ -498,7 +526,9 @@ app.post('/api/tasks/:id/publish', async (req, res) => {
         // LOGIKA WYSYŁANIA POWIADOMIEŃ
         if (assignedUserIds.length > 0) {
             const tokensResult = await pool.query('SELECT fcm_token FROM users WHERE id = ANY($1::bigint[]) AND fcm_token IS NOT NULL', [assignedUserIds]);
-            const tokens = tokensResult.rows.map(row => row.fcm_token);
+            // Spłaszczamy tablice tokenów do jednej listy
+            const tokens = tokensResult.rows.flatMap(row => row.fcm_token || []);
+            
             if (tokens.length > 0) {
                 const message = {
                     notification: {
