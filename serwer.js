@@ -333,20 +333,32 @@ app.get('/api/tasks/today', async (req, res) => {
     }
 });
 
-// NOWY Endpoint do szybkiej zmiany statusu zadania
+// ZAKTUALIZOWANY Endpoint do szybkiej zmiany statusu zadania z powiadomieniami
 app.patch('/api/tasks/:id/status', async (req, res) => {
     const { id } = req.params;
-    const { status } = req.body;
+    const { status, userId } = req.body; // Dodano userId
     if (!status) {
         return res.status(400).json({ message: 'Brak nowego statusu.' });
     }
     try {
-        const sql = 'UPDATE tasks SET status = $1 WHERE id = $2 RETURNING *';
-        const result = await pool.query(sql, [status, id]);
-        if (result.rowCount === 0) {
+        // NAJPIERW pobieramy aktualny stan zadania
+        const currentTaskResult = await pool.query('SELECT status, title, creator_id, notify_on_completion FROM tasks WHERE id = $1', [id]);
+        if (currentTaskResult.rowCount === 0) {
             return res.status(404).json({ message: 'Zadanie nie znalezione.' });
         }
-        res.json(result.rows[0]);
+        const currentTask = currentTaskResult.rows[0];
+
+        // Aktualizujemy status
+        const sql = 'UPDATE tasks SET status = $1 WHERE id = $2 RETURNING *';
+        const result = await pool.query(sql, [status, id]);
+        const updatedTask = result.rows[0];
+
+        // SPRAWDZAMY CZY ZADANIE ZOSTAŁO ZAKOŃCZONE I CZY TRZEBA WYSŁAĆ POWIADOMIENIE
+        if (currentTask.status === 'w toku' && status === 'zakończone' && currentTask.notify_on_completion) {
+            await sendCompletionNotification(currentTask, userId);
+        }
+
+        res.json(updatedTask);
     } catch (error) {
         console.error(`Błąd [PATCH /api/tasks/${id}/status]:`, error);
         res.status(500).json({ message: 'Błąd serwera podczas aktualizacji statusu.' });
@@ -356,17 +368,17 @@ app.patch('/api/tasks/:id/status', async (req, res) => {
 
 // [ZAKTUALIZOWANY] Tworzy zadanie jako szkic, z opcjonalnym powiązaniem do zadania cyklicznego
 app.post('/api/tasks', async (req, res) => {
-    // Dodajemy recurring_task_id do destrukturyzacji
-    const { title, content_state, creator_id, leader_id, deadline, importance, assignedUserIds, recurring_task_id } = req.body;
+    // Dodajemy recurring_task_id i notify_on_completion do destrukturyzacji
+    const { title, content_state, creator_id, leader_id, deadline, importance, assignedUserIds, recurring_task_id, notify_on_completion } = req.body;
     
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
         
-        // Dodajemy recurring_task_id do zapytania SQL i parametrów
+        // Dodajemy recurring_task_id i notify_on_completion do zapytania SQL i parametrów
         const taskSql = `
-            INSERT INTO tasks (id, title, content_state, creator_id, leader_id, deadline, importance, status, publication_date, recurring_task_id) 
-            VALUES (COALESCE((SELECT MAX(id) FROM tasks), 0) + 1, $1, $2, $3, $4, $5, $6, 'draft', NOW(), $7) RETURNING *;
+            INSERT INTO tasks (id, title, content_state, creator_id, leader_id, deadline, importance, status, publication_date, recurring_task_id, notify_on_completion) 
+            VALUES (COALESCE((SELECT MAX(id) FROM tasks), 0) + 1, $1, $2, $3, $4, $5, $6, 'draft', NOW(), $7, $8) RETURNING *;
         `;
         const params = [
             title || 'Nowy szkic',
@@ -375,7 +387,8 @@ app.post('/api/tasks', async (req, res) => {
             leader_id ? parseInt(leader_id, 10) : null,
             deadline || null,
             importance,
-            recurring_task_id ? parseInt(recurring_task_id, 10) : null // Dodajemy recurring_task_id
+            recurring_task_id ? parseInt(recurring_task_id, 10) : null, // Dodajemy recurring_task_id
+            notify_on_completion !== undefined ? notify_on_completion : true // Domyślnie true
         ];
         
         const taskResult = await client.query(taskSql, params);
@@ -404,17 +417,25 @@ app.post('/api/tasks', async (req, res) => {
 // [ZAKTUALIZOWANY] Aktualizuje zadanie, z opcjonalnym powiązaniem do zadania cyklicznego
 app.put('/api/tasks/:id', async (req, res) => {
     const { id } = req.params;
-    // Dodajemy recurring_task_id do destrukturyzacji
-    const { title, content_state, leader_id, deadline, importance, assignedUserIds, recurring_task_id } = req.body;
+    // Dodajemy recurring_task_id, notify_on_completion i userId do destrukturyzacji
+    const { title, content_state, leader_id, deadline, importance, assignedUserIds, recurring_task_id, notify_on_completion, userId } = req.body;
     
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
 
-        // Dodajemy recurring_task_id do zapytania SQL i parametrów
+        // NAJPIERW pobieramy aktualny stan zadania (do sprawdzenia zmiany statusu)
+        const currentTaskResult = await client.query('SELECT status, title, creator_id, notify_on_completion FROM tasks WHERE id = $1', [id]);
+        if (currentTaskResult.rowCount === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ message: 'Zadanie nie znalezione.' });
+        }
+        const currentTask = currentTaskResult.rows[0];
+
+        // Dodajemy recurring_task_id i notify_on_completion do zapytania SQL i parametrów
         const taskSql = `
-            UPDATE tasks SET title = $1, content_state = $2, leader_id = $3, deadline = $4, importance = $5, recurring_task_id = $6
-            WHERE id = $7 RETURNING *;
+            UPDATE tasks SET title = $1, content_state = $2, leader_id = $3, deadline = $4, importance = $5, recurring_task_id = $6, notify_on_completion = $7
+            WHERE id = $8 RETURNING *;
         `;
         const params = [
             title,
@@ -423,13 +444,11 @@ app.put('/api/tasks/:id', async (req, res) => {
             deadline || null,
             importance,
             recurring_task_id ? parseInt(recurring_task_id, 10) : null, // Dodajemy recurring_task_id
+            notify_on_completion !== undefined ? notify_on_completion : currentTask.notify_on_completion, // Zachowaj obecną wartość jeśli nie podano
             id
         ];
         const taskResult = await client.query(taskSql, params);
-        if (taskResult.rowCount === 0) {
-            await client.query('ROLLBACK');
-            return res.status(404).json({ message: 'Zadanie nie znalezione.' });
-        }
+        const updatedTask = taskResult.rows[0];
 
         await client.query('DELETE FROM task_assignments WHERE task_id = $1', [id]);
         if (assignedUserIds && assignedUserIds.length > 0) {
@@ -441,7 +460,14 @@ app.put('/api/tasks/:id', async (req, res) => {
         }
         
         await client.query('COMMIT');
-        res.json(taskResult.rows[0]);
+
+        // SPRAWDZAMY CZY ZADANIE ZOSTAŁO ZAKOŃCZONE I CZY TRZEBA WYSŁAĆ POWIADOMIENIE
+        if (currentTask.status === 'w toku' && updatedTask.status === 'zakończone' && currentTask.notify_on_completion) {
+            // Zadanie zostało zakończone i twórca chce powiadomienia
+            await sendCompletionNotification(currentTask, userId);
+        }
+
+        res.json(updatedTask);
 
     } catch (error) {
         await client.query('ROLLBACK');
@@ -577,6 +603,44 @@ app.put('/api/tasks/:id/deadline', async (req, res) => {
         res.status(500).json({ message: 'Błąd serwera.' });
     }
 });
+
+// =================================================================
+// --- FUNKCJA WYSYŁANIA POWIADOMIEŃ O ZAKOŃCZENIU ZADANIA ---
+// =================================================================
+
+async function sendCompletionNotification(task, executorUserId) {
+    try {
+        // Pobierz dane wykonawcy (tego kto zmienił status na zakończone)
+        let executorName = 'Nieznany użytkownik';
+        if (executorUserId) {
+            const executorResult = await pool.query('SELECT username FROM users WHERE id = $1', [executorUserId]);
+            if (executorResult.rows.length > 0) {
+                executorName = executorResult.rows[0].username;
+            }
+        }
+
+        // Pobierz tokeny FCM twórcy zadania
+        const creatorTokensResult = await pool.query('SELECT fcm_token FROM users WHERE id = $1 AND fcm_token IS NOT NULL', [task.creator_id]);
+        const tokens = creatorTokensResult.rows.flatMap(row => row.fcm_token || []);
+        
+        if (tokens.length > 0) {
+            const message = {
+                notification: {
+                    title: "Zadanie zostało zakończone! ✅",
+                    body: `'${task.title}' zostało ukończone przez ${executorName}`
+                },
+                tokens: tokens
+            };
+            
+            await admin.messaging().sendEachForMulticast(message);
+            console.log(`✅ Powiadomienie o zakończeniu zadania '${task.title}' wysłane do ${tokens.length} urządzeń twórcy.`);
+        } else {
+            console.log(`ℹ️ Brak tokenów FCM dla twórcy zadania '${task.title}' (ID: ${task.creator_id}).`);
+        }
+    } catch (error) {
+        console.error('❌ Błąd podczas wysyłania powiadomienia o zakończeniu zadania:', error);
+    }
+}
 
 // =================================================================
 // --- ENDPOINTY DLA STATYSTYK (BEZ ZMIAN) ---
