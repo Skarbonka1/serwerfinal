@@ -23,7 +23,9 @@ const corsOptions = {
         'http://localhost:5173', 
         'http://localhost:3000', 
         'https://frontend-final-black.vercel.app',
-        'https://serwer-for-render.onrender.com'
+        'https://serwer-for-render.onrender.com',
+        'https://frontendfinal-ten.vercel.app'
+      
     ]
 };
 app.use(cors(corsOptions));
